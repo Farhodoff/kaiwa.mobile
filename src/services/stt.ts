@@ -198,7 +198,7 @@ export async function stopSpeechRecognition(
       const result = (await sttResponse.json()) as {
         RecognitionStatus: string;
         DisplayText?: string;
-        NBest?: Array<{ Display: string; Confidence: number }>;
+        NBest?: { Display: string; Confidence: number }[];
       };
 
       const recognizedText =

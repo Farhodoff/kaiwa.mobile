@@ -1,8 +1,10 @@
 import { supabase } from '../lib/supabase';
-import { REAL_SCENARIOS, MobileScenario } from '../data/scenarios';
-import { REAL_DECKS, MobileCard } from '../data/decks';
-import { REAL_CURRICULUM_LESSONS } from '../data/curriculum';
-import { JLPT_MOCK_EXAM_DATA, ExamQuestion } from '../data/mockExams';
+
+/**
+ * All learning content is served by PostgreSQL (Supabase) — nothing in this
+ * module is bundled or hardcoded. Screens show loading / error states while
+ * the catalog is fetched from the backend.
+ */
 
 export type LessonContent = {
   vocab?: { ja: string; romaji?: string; uz: string }[];
@@ -36,12 +38,23 @@ export type Flashcard = {
   example?: string | null;
 };
 
+export type CardDeck = {
+  id: string;
+  title: string;
+  description: string;
+  level: string;
+  icon: string;
+  badgeColor: string;
+  cardCount: number;
+};
+
 export type QuizQuestion = {
   id: string;
   question: string;
   options: string[];
   correctIndex: number;
   explanation?: string | null;
+  section?: string | null;
 };
 
 export type JlptSection = {
@@ -52,9 +65,22 @@ export type JlptSection = {
   color: string;
 };
 
-export type ConversationTopic = MobileScenario;
+export type MobileScenario = {
+  id: string;
+  language?: string;
+  title_ja: string;
+  title_uz: string;
+  emoji: string;
+  difficulty: string;
+  category: string;
+  description_uz: string;
+  opening_line_ja: string;
+  opening_line_uz: string;
+  context_prompt: string;
+  key_phrases: string[];
+};
 
-export type AiReply = { ja: string; uz: string };
+export type ConversationTopic = MobileScenario;
 
 export type LessonProgressRow = {
   lesson_id: string;
@@ -65,174 +91,197 @@ export type LessonProgressRow = {
 
 const ORDER = { ascending: true } as const;
 
-export async function fetchLessons(levelFilter?: string): Promise<Lesson[]> {
-  try {
-    let query = supabase
-      .from('mobile_lessons')
-      .select('id, title, title_ja, level, minutes, xp, content, sort_order')
-      .order('sort_order', ORDER);
-    if (levelFilter) query = query.eq('level', levelFilter);
-    const { data, error } = await query;
-    if (!error && data && data.length > 0) {
-      return data.map((r) => ({
-        id: r.id,
-        title: r.title,
-        titleJa: r.title_ja,
-        level: r.level,
-        minutes: r.minutes,
-        xp: r.xp,
-        content: (r.content ?? {}) as LessonContent,
-      }));
-    }
-  } catch (e) {
-    console.warn('[fetchLessons] Offline / Network fallback:', e);
-  }
+const fail = (what: string, error: unknown): never => {
+  const detail = error instanceof Error ? error.message : String(error ?? '');
+  console.warn(`[content] ${what}:`, detail);
+  throw new Error(
+    error && typeof error === 'object' && 'message' in error
+      ? `${what}: ${String((error as { message: unknown }).message)}`
+      : what,
+  );
+};
 
-  if (levelFilter) {
-    return REAL_CURRICULUM_LESSONS.filter((l) => l.level.toUpperCase() === levelFilter.toUpperCase());
-  }
-  return REAL_CURRICULUM_LESSONS;
+export async function fetchLessons(levelFilter?: string): Promise<Lesson[]> {
+  let query = supabase
+    .from('mobile_lessons')
+    .select('id, title, title_ja, level, minutes, xp, content, sort_order')
+    .order('sort_order', ORDER);
+  if (levelFilter) query = query.eq('level', levelFilter);
+
+  const { data, error } = await query;
+  if (error) fail('Darslarni yuklab bo\u2018lmadi', error);
+
+  return (data ?? []).map((r) => ({
+    id: r.id,
+    title: r.title,
+    titleJa: r.title_ja,
+    level: r.level,
+    minutes: r.minutes,
+    xp: r.xp,
+    content: (r.content ?? {}) as LessonContent,
+  }));
 }
 
 export async function fetchLesson(id: string): Promise<Lesson | null> {
-  try {
-    const { data, error } = await supabase
-      .from('mobile_lessons')
-      .select('id, title, title_ja, level, minutes, xp, content, sort_order')
-      .eq('id', id)
-      .maybeSingle();
-    if (!error && data) {
-      return {
-        id: data.id,
-        title: data.title,
-        titleJa: data.title_ja,
-        level: data.level,
-        minutes: data.minutes,
-        xp: data.xp,
-        content: (data.content ?? {}) as LessonContent,
-      };
-    }
-  } catch (e) {
-    console.warn('[fetchLesson] Offline / Network fallback:', e);
-  }
-  return REAL_CURRICULUM_LESSONS.find((l) => l.id === id) ?? null;
+  const { data, error } = await supabase
+    .from('mobile_lessons')
+    .select('id, title, title_ja, level, minutes, xp, content')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) fail('Darsni yuklab bo\u2018lmadi', error);
+  if (!data) return null;
+
+  return {
+    id: data.id,
+    title: data.title,
+    titleJa: data.title_ja,
+    level: data.level,
+    minutes: data.minutes,
+    xp: data.xp,
+    content: (data.content ?? {}) as LessonContent,
+  };
 }
 
 export async function fetchQuizQuestions(
   quizType: 'lesson' | 'mock',
   lessonIdOrLevel?: string,
 ): Promise<QuizQuestion[]> {
-  try {
-    let query = supabase
-      .from('mobile_quiz_questions')
-      .select('id, question, options, correct_index, explanation, sort_order')
-      .eq('quiz_type', quizType)
-      .order('sort_order', ORDER);
-    if (quizType === 'lesson' && lessonIdOrLevel) query = query.eq('lesson_id', lessonIdOrLevel);
-    const { data, error } = await query;
-    if (!error && data && data.length > 0) {
-      return data.map((r) => ({
-        id: r.id,
-        question: r.question,
-        options: (r.options ?? []) as string[],
-        correctIndex: r.correct_index,
-        explanation: r.explanation,
-      }));
-    }
-  } catch (e) {
-    console.warn('[fetchQuizQuestions] Database fallback:', e);
+  let query = supabase
+    .from('mobile_quiz_questions')
+    .select('id, question, options, correct_index, explanation, section, sort_order')
+    .eq('quiz_type', quizType)
+    .order('sort_order', ORDER);
+
+  if (quizType === 'lesson' && lessonIdOrLevel) {
+    query = query.eq('lesson_id', lessonIdOrLevel);
+  }
+  if (quizType === 'mock' && lessonIdOrLevel) {
+    query = query.eq('level', lessonIdOrLevel.toUpperCase());
   }
 
-  // Use real JLPT Mock exam questions from JLPT_MOCK_EXAM_DATA
-  const levelKey = (lessonIdOrLevel?.toUpperCase() as 'N5' | 'N4' | 'N3' | 'N2' | 'N1') || 'N5';
-  const realQuestions: ExamQuestion[] = JLPT_MOCK_EXAM_DATA[levelKey] || JLPT_MOCK_EXAM_DATA.N5;
+  const { data, error } = await query;
+  if (error) fail('Savollarni yuklab bo\u2018lmadi', error);
 
-  return realQuestions.slice(0, 15).map((q) => ({
-    id: `q_${q.id}`,
-    question: q.questionText,
-    options: q.options,
-    correctIndex: q.correctAnswer,
-    explanation: q.explanationUzbek,
+  return (data ?? []).map((r) => ({
+    id: r.id,
+    question: r.question,
+    options: (r.options ?? []) as string[],
+    correctIndex: r.correct_index,
+    explanation: r.explanation,
+    section: r.section,
   }));
 }
 
-export async function fetchFlashcards(deckId?: string): Promise<Flashcard[]> {
-  try {
-    const { data, error } = await supabase
+export async function fetchDecks(): Promise<CardDeck[]> {
+  const { data, error } = await supabase
+    .from('mobile_decks')
+    .select('id, title, description, level, icon, badge_color, sort_order, cards:mobile_flashcards(count)')
+    .order('sort_order', ORDER);
+  if (error) fail('To\u2018plamlarni yuklab bo\u2018lmadi', error);
+
+  return (data ?? []).map((r) => {
+    const embedded = (r as { cards?: { count?: number }[] }).cards;
+    return {
+      id: r.id,
+      title: r.title,
+      description: r.description,
+      level: r.level,
+      icon: r.icon,
+      badgeColor: r.badge_color,
+      cardCount: embedded?.[0]?.count ?? 0,
+    };
+  });
+}
+
+export async function fetchFlashcards(deckId: string): Promise<Flashcard[]> {
+  // Supabase caps a single REST response (default 1000 rows), so decks are paged.
+  const PAGE = 1000;
+  const rows: Record<string, unknown>[] = [];
+
+  for (let from = 0; ; from += PAGE) {
+    let query = supabase
       .from('mobile_flashcards')
       .select('id, front, front_ja, back, reading, example, sort_order')
-      .order('sort_order', ORDER);
-    if (!error && data && data.length > 0 && !deckId) {
-      return data.map((r) => ({
-        id: r.id,
-        front: r.front,
-        frontJa: r.front_ja,
-        back: r.back,
-        reading: r.reading,
-        example: r.example,
-      }));
-    }
-  } catch (e) {
-    console.warn('[fetchFlashcards] Offline fallback:', e);
+      .order('sort_order', ORDER)
+      .range(from, from + PAGE - 1);
+    if (deckId) query = query.eq('deck_id', deckId);
+
+    const { data, error } = await query;
+    if (error) fail('Kartalarni yuklab bo\u2018lmadi', error);
+    const page = data ?? [];
+    rows.push(...(page as Record<string, unknown>[]));
+    if (page.length < PAGE) break;
   }
 
-  const selectedDeck = REAL_DECKS.find((d) => d.id === deckId) || REAL_DECKS[0];
-  return selectedDeck.cards.map((c) => ({
-    id: c.id,
-    front: c.front,
-    frontJa: c.frontJa,
-    back: c.back,
-    reading: c.reading,
-    example: c.example,
+  return rows.map((r) => ({
+    id: String(r.id ?? ''),
+    front: String(r.front ?? ''),
+    frontJa: (r.front_ja as string) ?? null,
+    back: String(r.back ?? ''),
+    reading: (r.reading as string) ?? null,
+    example: (r.example as string) ?? null,
   }));
 }
 
 export async function fetchJlptSections(): Promise<JlptSection[]> {
-  try {
-    const { data, error } = await supabase
-      .from('mobile_jlpt_sections')
-      .select('id, title, title_ja, total_count, color, sort_order')
-      .order('sort_order', ORDER);
-    if (!error && data && data.length > 0) {
-      return data.map((r) => ({
-        id: r.id,
-        title: r.title,
-        titleJa: r.title_ja,
-        count: r.total_count,
-        color: r.color,
-      }));
-    }
-  } catch (e) {
-    console.warn('[fetchJlptSections] Offline fallback:', e);
-  }
+  const { data, error } = await supabase
+    .from('mobile_jlpt_sections')
+    .select('id, title, title_ja, total_count, color, sort_order')
+    .order('sort_order', ORDER);
+  if (error) fail('JLPT bo\u2018limlarini yuklab bo\u2018lmadi', error);
 
-  return [
-    { id: 'vocab', title: 'Vocabulary & Kanji', titleJa: '文字・語彙', count: 35, color: '#6C5CE7' },
-    { id: 'grammar', title: 'Grammar', titleJa: '文法', count: 30, color: '#38BDF8' },
-    { id: 'reading', title: 'Reading (Dokkai)', titleJa: '読解', count: 20, color: '#F59E0B' },
-    { id: 'listening', title: 'Listening (Choukai)', titleJa: '聴解', count: 25, color: '#22C55E' },
-  ];
+  return (data ?? []).map((r) => ({
+    id: r.id,
+    title: r.title,
+    titleJa: r.title_ja,
+    count: r.total_count,
+    color: r.color,
+  }));
+}
+
+function toScenario(r: Record<string, unknown>): MobileScenario {
+  return {
+    id: String(r.id ?? ''),
+    language: (r.language as string) ?? 'ja',
+    title_ja: String(r.title_ja ?? ''),
+    title_uz: String(r.title_uz ?? ''),
+    emoji: String(r.emoji ?? '💬'),
+    difficulty: String(r.difficulty ?? 'N5'),
+    category: String(r.category ?? 'daily'),
+    description_uz: String(r.description_uz ?? ''),
+    opening_line_ja: String(r.opening_line_ja ?? ''),
+    opening_line_uz: String(r.opening_line_uz ?? ''),
+    context_prompt: String(r.context_prompt ?? ''),
+    key_phrases: Array.isArray(r.key_phrases) ? (r.key_phrases as string[]) : [],
+  };
 }
 
 export async function fetchConversationTopics(levelFilter?: string): Promise<ConversationTopic[]> {
+  let query = supabase
+    .from('mobile_scenarios')
+    .select(
+      'id, language, title_ja, title_uz, emoji, difficulty, category, description_uz, opening_line_ja, opening_line_uz, context_prompt, key_phrases, sort_order',
+    )
+    .order('sort_order', ORDER);
   if (levelFilter && levelFilter !== 'all') {
-    return REAL_SCENARIOS.filter((s) => s.difficulty.toUpperCase() === levelFilter.toUpperCase());
+    query = query.eq('difficulty', levelFilter.toUpperCase());
   }
-  return REAL_SCENARIOS;
+
+  const { data, error } = await query;
+  if (error) fail('Muloqot ssenariylarini yuklab bo\u2018lmadi', error);
+  return (data ?? []).map((r) => toScenario(r as Record<string, unknown>));
 }
 
-export async function fetchAiReplies(topicId?: string): Promise<AiReply[]> {
-  const scenario = REAL_SCENARIOS.find((s) => s.id === topicId);
-  if (scenario) {
-    return [
-      { ja: scenario.opening_line_ja, uz: scenario.opening_line_uz },
-      { ja: 'かしこまりました。他にご質問やご注文はありますか？', uz: 'Tushunarli. Yana biror savol yoki buyurtmangiz bormi?' },
-    ];
-  }
-  return [
-    { ja: 'はじめまして！わたしはユキです。', uz: 'Tanishganimdan xursandman! Men Yukiman.' },
-    { ja: '今日はどんなお話をしましょうか？', uz: 'Bugun nima haqida gaplashamiz?' },
-  ];
+export async function fetchScenario(id: string): Promise<MobileScenario | null> {
+  const { data, error } = await supabase
+    .from('mobile_scenarios')
+    .select(
+      'id, language, title_ja, title_uz, emoji, difficulty, category, description_uz, opening_line_ja, opening_line_uz, context_prompt, key_phrases',
+    )
+    .eq('id', id)
+    .maybeSingle();
+  if (error) fail('Ssenariyni yuklab bo\u2018lmadi', error);
+  return data ? toScenario(data as Record<string, unknown>) : null;
 }
 
 /** Merge lessons with the user's progress rows and derive each status. */

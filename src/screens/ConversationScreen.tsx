@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -16,13 +16,11 @@ import { RootStackParamList } from '../navigation/types';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { ErrorView, LoadingView } from '../components/StateView';
 import { useAsync } from '../hooks/useAsync';
-import { fetchAiReplies } from '../services/content';
+import { fetchScenario } from '../services/content';
 import { CoachTurn, askCoach } from '../services/coach';
 import { playTTS, stopTTS } from '../services/tts';
-import { fetchSpeechToken } from '../services/speech';
 import { startSpeechRecognition, stopSpeechRecognition } from '../services/stt';
 import { useApp } from '../store/AppContext';
-import { REAL_SCENARIOS } from '../data/scenarios';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Conversation'>;
 type Msg = {
@@ -47,36 +45,28 @@ export default function ConversationScreen({ route, navigation }: Props) {
   /** Whether the live AI proxy answered at least once this session. */
   const [live, setLive] = useState<'unknown' | 'live' | 'offline'>('unknown');
   const scrollRef = useRef<React.ElementRef<typeof ScrollView>>(null);
-  const replyIndex = useRef(0);
   const sendingRef = useRef(false);
   const messagesRef = useRef<Msg[]>([]);
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
 
-  const scenario = useMemo(
-    () => (topicId ? REAL_SCENARIOS.find((s) => s.id === topicId) : null),
+  // The scenario (opening line, key phrases, AI role-play prompt) comes from PostgreSQL.
+  const scenarioQuery = useAsync(
+    () => (topicId ? fetchScenario(topicId) : Promise.resolve(null)),
     [topicId],
   );
+  const scenario = scenarioQuery.data ?? null;
+  const openingJa = scenario?.opening_line_ja ?? '';
+  const openingUz = scenario?.opening_line_uz || scenario?.description_uz || '';
+  const openingMsg: Msg | null = openingJa
+    ? { id: 'opening', from: 'ai', text: openingJa, uz: openingUz || undefined }
+    : null;
 
-  const repliesQuery = useAsync(() => fetchAiReplies(topicId), [topicId]);
-  const replies = useMemo(() => repliesQuery.data ?? [], [repliesQuery.data]);
-
-  // Seed the opening line once replies or scenario are loaded.
+  // Play the scenario's opening line once (external system, no state update).
   useEffect(() => {
-    if (messagesRef.current.length === 0) {
-      if (scenario?.opening_line_ja) {
-        const lineJa = scenario.opening_line_ja;
-        const lineUz = scenario.opening_line_uz || scenario.description_uz;
-        setMessages([{ id: nextId(), from: 'ai', text: lineJa, uz: lineUz }]);
-        void playTTS(lineJa, 'ja').catch(() => {});
-      } else if (replies.length > 0) {
-        setMessages([{ id: nextId(), from: 'ai', text: replies[0].ja, uz: replies[0].uz }]);
-        replyIndex.current = 1 % replies.length;
-        void playTTS(replies[0].ja, 'ja').catch(() => {});
-      }
-    }
-  }, [scenario, replies]);
+    if (openingJa) void playTTS(openingJa, 'ja').catch(() => {});
+  }, [openingJa]);
 
   // Stop ongoing TTS audio and STT when unmounting
   useEffect(() => {
@@ -114,10 +104,16 @@ export default function ConversationScreen({ route, navigation }: Props) {
     setThinking(true);
 
     // Last 12 turns give the coach enough context without bloating the request.
-    const history: CoachTurn[] = [...messagesRef.current, mine]
-      .filter((m) => m.text.trim().length > 0)
-      .slice(-12)
-      .map((m) => ({ role: m.from === 'me' ? 'user' : 'assistant', content: m.text }));
+    const turns: CoachTurn[] = openingMsg
+      ? [{ role: 'assistant', content: openingMsg.text }]
+      : [];
+    for (const m of messagesRef.current) {
+      turns.push({ role: m.from === 'me' ? 'user' : 'assistant', content: m.text });
+    }
+    turns.push({ role: 'user', content: value });
+    const history = turns
+      .filter((t) => t.content.trim().length > 0)
+      .slice(-12);
 
     try {
       const res = await askCoach({
@@ -140,15 +136,15 @@ export default function ConversationScreen({ route, navigation }: Props) {
       // Speak AI reply via Neural TTS
       void playTTS(res.reply, 'ja').catch(() => {});
     } catch {
-      // Provider unreachable — keep the lesson alive with the scripted replies
-      // stored in PostgreSQL instead of showing an error mid-conversation.
+      // No scripted fallback: tell the learner the coach is unreachable and
+      // let them retry, instead of faking an AI reply.
       setLive('offline');
-      const fallback = replies.length
-        ? replies[replyIndex.current % replies.length]
-        : { ja: 'すみません、もう一度お願いします。', uz: 'Kechirasiz, yana bir marta bering.' };
-      replyIndex.current += 1;
-      push({ id: nextId(), from: 'ai', text: fallback.ja, uz: fallback.uz });
-      void playTTS(fallback.ja, 'ja').catch(() => {});
+      push({
+        id: nextId(),
+        from: 'ai',
+        text: 'すみません、いま通信できません。もう一度お願いします。',
+        uz: 'Kechirasiz, Kaiwa AI bilan aloqa uzildi. Yana bir marta yuboring.',
+      });
     } finally {
       sendingRef.current = false;
       setThinking(false);
@@ -214,7 +210,7 @@ export default function ConversationScreen({ route, navigation }: Props) {
     }
   };
 
-  if (repliesQuery.loading) {
+  if (topicId && scenarioQuery.loading) {
     return (
       <View style={styles.container}>
         <LoadingView label="Suhbat yuklanmoqda…" />
@@ -222,10 +218,10 @@ export default function ConversationScreen({ route, navigation }: Props) {
     );
   }
 
-  if (repliesQuery.error) {
+  if (topicId && scenarioQuery.error) {
     return (
       <View style={styles.container}>
-        <ErrorView message={repliesQuery.error} onRetry={repliesQuery.reload} />
+        <ErrorView message={scenarioQuery.error} onRetry={scenarioQuery.reload} />
       </View>
     );
   }
@@ -267,7 +263,7 @@ export default function ConversationScreen({ route, navigation }: Props) {
         contentContainerStyle={styles.messages}
         showsVerticalScrollIndicator={false}
       >
-        {messages.map((m) => (
+        {[...(openingMsg ? [openingMsg] : []), ...messages].map((m) => (
           <View
             key={m.id}
             style={[

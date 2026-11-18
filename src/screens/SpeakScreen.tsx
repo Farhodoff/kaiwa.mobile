@@ -10,9 +10,8 @@ import { Card } from '../components/Card';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { ErrorView, LoadingView } from '../components/StateView';
 import { useAsync } from '../hooks/useAsync';
-import { fetchConversationTopics } from '../services/content';
+import { fetchConversationTopics, MobileScenario } from '../services/content';
 import { useApp } from '../store/AppContext';
-import { MobileScenario } from '../data/scenarios';
 
 type Props = CompositeScreenProps<
   BottomTabScreenProps<MainTabParamList, 'Speak'>,
@@ -26,7 +25,7 @@ export default function SpeakScreen({ navigation }: Props) {
   const [selectedLevel, setSelectedLevel] = useState<string>('all');
 
   const topicsQuery = useAsync(() => fetchConversationTopics(), []);
-  const allTopics = topicsQuery.data ?? [];
+  const allTopics = useMemo(() => topicsQuery.data ?? [], [topicsQuery.data]);
 
   const filteredTopics = useMemo(() => {
     if (selectedLevel === 'all') return allTopics;

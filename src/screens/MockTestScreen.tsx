@@ -32,7 +32,7 @@ export default function MockTestScreen({ route, navigation }: Props) {
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [timeLeft, setTimeLeft] = useState(TIME_LIMIT);
   const [finished, setFinished] = useState(false);
-  const [awarded, setAwarded] = useState(false);
+  const awardedRef = React.useRef(false);
 
   const quizQuery = useAsync(() => fetchQuizQuestions('mock', level), [level]);
   const questions = useMemo(() => quizQuery.data ?? [], [quizQuery.data]);
@@ -74,6 +74,13 @@ export default function MockTestScreen({ route, navigation }: Props) {
     (s, item) => s + (answers[item.id] === item.correctIndex ? 1 : 0),
     0,
   );
+
+  React.useEffect(() => {
+    if (finished && !awardedRef.current) {
+      awardedRef.current = true;
+      addXp(score * 15);
+    }
+  }, [finished, score, addXp]);
 
   if (quizQuery.loading) {
     return (
@@ -146,10 +153,6 @@ export default function MockTestScreen({ route, navigation }: Props) {
   if (finished) {
     const pct = Math.round((score / questions.length) * 100);
     const passed = pct >= 60;
-    if (!awarded) {
-      setAwarded(true);
-      addXp(score * 15);
-    }
     return (
       <View style={styles.container}>
         <ScreenHeader
@@ -203,7 +206,7 @@ export default function MockTestScreen({ route, navigation }: Props) {
               setAnswers({});
               setTimeLeft(TIME_LIMIT);
               setFinished(false);
-              setAwarded(false);
+              awardedRef.current = false;
             }}
             style={{ marginTop: spacing.md }}
           />

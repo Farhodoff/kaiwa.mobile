@@ -11,9 +11,8 @@ import { PrimaryButton } from '../components/PrimaryButton';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { ErrorView, LoadingView } from '../components/StateView';
 import { useAsync } from '../hooks/useAsync';
-import { fetchFlashcards } from '../services/content';
+import { CardDeck, fetchDecks, fetchFlashcards } from '../services/content';
 import { playTTS } from '../services/tts';
-import { REAL_DECKS } from '../data/decks';
 import { useApp } from '../store/AppContext';
 
 type Props = CompositeScreenProps<
@@ -27,18 +26,25 @@ const GRADE_XP: Record<Grade, number> = { yana: 1, qiyin: 3, yaxshi: 3, oson: 3 
 
 export default function CardsScreen({ navigation }: Props) {
   const { reviewedToday, markCardReviewed, addXp } = useApp();
-  const [selectedDeckId, setSelectedDeckId] = useState<string>(REAL_DECKS[0].id);
+  const [selectedDeckId, setSelectedDeckId] = useState<string>('');
   const [index, setIndex] = useState(0);
   const [flipped, setFlipped] = useState(false);
   const [sessionDone, setSessionDone] = useState(false);
 
-  const cardsQuery = useAsync(() => fetchFlashcards(selectedDeckId), [selectedDeckId]);
+  const decksQuery = useAsync(() => fetchDecks(), []);
+  const decks = useMemo(() => decksQuery.data ?? [], [decksQuery.data]);
+
+  const activeDeckId = selectedDeckId || decks[0]?.id || '';
+  const cardsQuery = useAsync(
+    () => (activeDeckId ? fetchFlashcards(activeDeckId) : Promise.resolve([])),
+    [activeDeckId],
+  );
   const cards = cardsQuery.data ?? [];
   const card = cards[index];
 
-  const currentDeck = useMemo(
-    () => REAL_DECKS.find((d) => d.id === selectedDeckId) || REAL_DECKS[0],
-    [selectedDeckId],
+  const currentDeck: CardDeck | undefined = useMemo(
+    () => decks.find((d) => d.id === activeDeckId) ?? decks[0],
+    [decks, activeDeckId],
   );
 
   const progress = useMemo(
@@ -76,10 +82,18 @@ export default function CardsScreen({ navigation }: Props) {
     setSessionDone(false);
   };
 
-  if (cardsQuery.loading) {
+  if (decksQuery.loading || cardsQuery.loading) {
     return (
       <View style={styles.container}>
         <LoadingView label="Kartalar yuklanmoqda…" />
+      </View>
+    );
+  }
+
+  if (decksQuery.error) {
+    return (
+      <View style={styles.container}>
+        <ErrorView message={decksQuery.error} onRetry={decksQuery.reload} />
       </View>
     );
   }
@@ -92,10 +106,16 @@ export default function CardsScreen({ navigation }: Props) {
     );
   }
 
-  if (cards.length === 0) {
+  if (!currentDeck || decks.length === 0 || cards.length === 0) {
     return (
       <View style={styles.container}>
-        <ErrorView message="Hozircha kartalar mavjud emas" onRetry={cardsQuery.reload} />
+        <ErrorView
+          message="Hozircha kartalar mavjud emas"
+          onRetry={() => {
+            void decksQuery.reload();
+            void cardsQuery.reload();
+          }}
+        />
       </View>
     );
   }
@@ -148,8 +168,8 @@ export default function CardsScreen({ navigation }: Props) {
           style={styles.deckScroll}
           contentContainerStyle={styles.deckList}
         >
-          {REAL_DECKS.map((d) => {
-            const active = d.id === selectedDeckId;
+          {decks.map((d) => {
+            const active = d.id === activeDeckId;
             return (
               <Pressable
                 key={d.id}

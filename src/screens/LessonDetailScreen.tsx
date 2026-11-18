@@ -8,7 +8,7 @@ import { Card } from '../components/Card';
 import { ProgressBar } from '../components/ProgressBar';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { ScreenHeader } from '../components/ScreenHeader';
-import { ErrorView, LoadingView } from '../components/StateView';
+import { LoadingView } from '../components/StateView';
 import { useAsync } from '../hooks/useAsync';
 import { fetchLesson } from '../services/content';
 import { playTTS } from '../services/tts';
