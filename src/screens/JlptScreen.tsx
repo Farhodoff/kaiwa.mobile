@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { CompositeScreenProps } from '@react-navigation/native';
 import { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
@@ -10,7 +10,11 @@ import { Card } from '../components/Card';
 import { ProgressBar } from '../components/ProgressBar';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { ScreenHeader } from '../components/ScreenHeader';
-import { JLPT_SECTIONS, LEVELS } from '../data/content';
+import { ErrorView, LoadingView } from '../components/StateView';
+import { useAsync } from '../hooks/useAsync';
+import { fetchJlptSections } from '../services/content';
+import { LEVELS } from '../data/content';
+import { useApp } from '../store/AppContext';
 
 type Props = CompositeScreenProps<
   BottomTabScreenProps<MainTabParamList, 'Jlpt'>,
@@ -19,9 +23,37 @@ type Props = CompositeScreenProps<
 
 export default function JlptScreen({ navigation }: Props) {
   const [level, setLevel] = useState('N3');
-  const sections = JLPT_SECTIONS;
+  const { jlptDone: progress } = useApp();
+
+  const sectionsQuery = useAsync(() => fetchJlptSections(), []);
+
+  const sections = useMemo(
+    () =>
+      (sectionsQuery.data ?? []).map((s) => ({
+        ...s,
+        done: Math.min(s.count, progress[s.id] ?? 0),
+      })),
+    [sectionsQuery.data, progress],
+  );
+
   const totalDone = sections.reduce((s, x) => s + x.done, 0);
   const total = sections.reduce((s, x) => s + x.count, 0);
+
+  if (sectionsQuery.loading) {
+    return (
+      <View style={styles.container}>
+        <LoadingView label="JLPT boʻlimlari yuklanmoqda…" />
+      </View>
+    );
+  }
+
+  if (sectionsQuery.error) {
+    return (
+      <View style={styles.container}>
+        <ErrorView message={sectionsQuery.error} onRetry={sectionsQuery.reload} />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -126,14 +158,14 @@ export default function JlptScreen({ navigation }: Props) {
           <PrimaryButton
             title="Boshlash"
             small
-            onPress={() => navigation.navigate('MockTest')}
+            onPress={() => navigation.navigate('MockTest', { level })}
           />
         </Card>
 
         <PrimaryButton
           title="To'liq simulyatsiya"
           variant="secondary"
-          onPress={() => navigation.navigate('MockTest')}
+          onPress={() => navigation.navigate('MockTest', { level })}
           style={{ marginTop: spacing.lg, marginHorizontal: spacing.xl }}
         />
       </ScrollView>

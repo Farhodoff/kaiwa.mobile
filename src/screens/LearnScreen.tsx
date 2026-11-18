@@ -1,15 +1,18 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { CompositeScreenProps } from '@react-navigation/native';
 import { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, radius, shadow, spacing, typography } from '../theme';
+import { colors, radius, spacing, typography } from '../theme';
 import { MainTabParamList, RootStackParamList } from '../navigation/types';
 import { Card } from '../components/Card';
 import { ProgressBar } from '../components/ProgressBar';
 import { ScreenHeader } from '../components/ScreenHeader';
-import { LESSONS, USER } from '../data/content';
+import { ErrorView, LoadingView } from '../components/StateView';
+import { useAsync } from '../hooks/useAsync';
+import { computeLessonStatuses, fetchLessons } from '../services/content';
+import { useApp } from '../store/AppContext';
 
 type Props = CompositeScreenProps<
   BottomTabScreenProps<MainTabParamList, 'Learn'>,
@@ -20,6 +23,63 @@ const TABS = ['Darslar', 'Yo\'l xaritasi', 'Yutuqlar'] as const;
 
 export default function LearnScreen({ navigation }: Props) {
   const [tab, setTab] = useState<(typeof TABS)[number]>('Darslar');
+  const { level, lessonProgress, streak, conversationsDone, lessonsDone } = useApp();
+
+  const lessonsQuery = useAsync(() => fetchLessons(), []);
+  const lessons = useMemo(
+    () =>
+      lessonsQuery.data ? computeLessonStatuses(lessonsQuery.data, lessonProgress) : null,
+    [lessonsQuery.data, lessonProgress],
+  );
+
+  const doneCount = lessons?.filter((l) => l.status === 'done').length ?? 0;
+  const totalLessons = lessons?.length ?? 0;
+
+  const achievements = useMemo(
+    () => [
+      {
+        icon: 'flame',
+        title: `${streak} kunlik streak`,
+        desc: 'Barqaror davom eting',
+        earned: streak >= 3,
+      },
+      {
+        icon: 'mic',
+        title: 'Birinchi suhbat',
+        desc: 'AI bilan 1 ta suhbat',
+        earned: conversationsDone >= 1,
+      },
+      {
+        icon: 'book',
+        title: '50 dars',
+        desc: '50 ta darsni tugating',
+        earned: lessonsDone >= 50,
+      },
+      {
+        icon: 'trophy',
+        title: 'N3 sertifikat',
+        desc: 'N3 imtihonini oʻting',
+        earned: false,
+      },
+    ],
+    [streak, conversationsDone, lessonsDone],
+  );
+
+  if (lessonsQuery.loading) {
+    return (
+      <View style={styles.container}>
+        <LoadingView label="Darslar yuklanmoqda…" />
+      </View>
+    );
+  }
+
+  if (lessonsQuery.error || !lessons) {
+    return (
+      <View style={styles.container}>
+        <ErrorView message={lessonsQuery.error ?? undefined} onRetry={lessonsQuery.reload} />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -28,21 +88,23 @@ export default function LearnScreen({ navigation }: Props) {
 
         <View style={styles.head}>
           <Text style={typography.h1}>My lessons</Text>
-          <Text style={styles.sub}>Beginner II · Lesson 12</Text>
+          <Text style={styles.sub}>{level} · Lesson {doneCount + 1}</Text>
         </View>
 
         {/* Level summary */}
         <Card style={styles.summary}>
           <View style={styles.summaryLeft}>
             <View style={styles.levelBadge}>
-              <Text style={styles.levelBadgeText}>{USER.level}</Text>
+              <Text style={styles.levelBadgeText}>{level}</Text>
             </View>
             <View style={{ flex: 1 }}>
               <Text style={typography.title}>Minna no Nihongo I</Text>
-              <Text style={styles.summaryMeta}>12 / 48 dars tugallandi</Text>
+              <Text style={styles.summaryMeta}>
+                {doneCount} / {totalLessons} dars tugallandi
+              </Text>
             </View>
           </View>
-          <ProgressBar progress={0.25} />
+          <ProgressBar progress={totalLessons ? doneCount / totalLessons : 0} />
         </Card>
 
         {/* Tabs */}
@@ -62,7 +124,7 @@ export default function LearnScreen({ navigation }: Props) {
 
         {tab === 'Darslar' ? (
           <View style={styles.lessonList}>
-            {LESSONS.map((l) => {
+            {lessons.map((l) => {
               const locked = l.status === 'locked';
               const current = l.status === 'current';
               return (
@@ -149,7 +211,7 @@ export default function LearnScreen({ navigation }: Props) {
 
         {tab === "Yo'l xaritasi" ? (
           <View style={styles.path}>
-            {LESSONS.map((l, i) => {
+            {lessons.map((l, i) => {
               const done = l.status === 'done';
               const current = l.status === 'current';
               return (
@@ -171,7 +233,7 @@ export default function LearnScreen({ navigation }: Props) {
                         {i + 1}
                       </Text>
                     </View>
-                    {i < LESSONS.length - 1 ? (
+                    {i < lessons.length - 1 ? (
                       <View
                         style={[
                           styles.pathConnector,
@@ -196,12 +258,7 @@ export default function LearnScreen({ navigation }: Props) {
 
         {tab === 'Yutuqlar' ? (
           <View style={styles.achievements}>
-            {[
-              { icon: 'flame', title: '12 kunlik streak', desc: 'Barqaror davom eting', earned: true },
-              { icon: 'mic', title: 'Birinchi suhbat', desc: 'AI bilan 1 ta suhbat', earned: true },
-              { icon: 'book', title: '50 dars', desc: '50 ta darsni tugating', earned: false },
-              { icon: 'trophy', title: 'N3 sertifikat', desc: 'N3 imtihonini o\'ting', earned: false },
-            ].map((a) => (
+            {achievements.map((a) => (
               <Card key={a.title} style={styles.achv}>
                 <View
                   style={[

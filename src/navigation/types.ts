@@ -21,8 +21,8 @@ export type RootStackParamList = {
   Auth: NavigatorScreenParams<AuthStackParamList>;
   LessonDetail: { lessonId: string; title: string; level: string };
   LessonQuiz: { lessonId: string; title: string; level: string };
-  MockTest: undefined;
-  Conversation: { topic: string; level: string };
+  MockTest: { level?: string } | undefined;
+  Conversation: { topic: string; level: string; topicId?: string };
   Progress: undefined;
   Notifications: undefined;
   Settings: undefined;

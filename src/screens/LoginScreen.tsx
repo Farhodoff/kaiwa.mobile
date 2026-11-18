@@ -255,6 +255,16 @@ export default function LoginScreen({ navigation }: Props) {
           </Text>
         </Pressable>
 
+        <Pressable
+          style={styles.guestBtn}
+          onPress={() => {
+            navigation.replace('Main', { screen: 'Home' });
+          }}
+        >
+          <Ionicons name="person-outline" size={18} color={colors.textSecondary} />
+          <Text style={styles.guestBtnText}>Mehmon sifatida kirish</Text>
+        </Pressable>
+
         {isSignup ? (
           <Text style={styles.terms}>
             Davom etish orqali Xizmat shartlari va Maxfiylik siyosatiga
@@ -367,6 +377,21 @@ const styles = StyleSheet.create({
   },
   socialText: { fontSize: 15, fontWeight: '600', color: colors.text },
   socialBtnDisabled: { opacity: 0.6 },
+  guestBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    height: 48,
+    borderRadius: radius.pill,
+    backgroundColor: colors.divider,
+    marginBottom: spacing.md,
+  },
+  guestBtnText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
   terms: {
     ...typography.caption,
     textAlign: 'center',

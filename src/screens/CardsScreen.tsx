@@ -6,11 +6,14 @@ import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, shadow, spacing, typography } from '../theme';
 import { MainTabParamList, RootStackParamList } from '../navigation/types';
-import { Card } from '../components/Card';
 import { ProgressBar } from '../components/ProgressBar';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { ScreenHeader } from '../components/ScreenHeader';
-import { FLASHCARDS } from '../data/content';
+import { ErrorView, LoadingView } from '../components/StateView';
+import { useAsync } from '../hooks/useAsync';
+import { fetchFlashcards } from '../services/content';
+import { playTTS } from '../services/tts';
+import { REAL_DECKS } from '../data/decks';
 import { useApp } from '../store/AppContext';
 
 type Props = CompositeScreenProps<
@@ -20,25 +23,47 @@ type Props = CompositeScreenProps<
 
 type Grade = 'yana' | 'qiyin' | 'yaxshi' | 'oson';
 
+const GRADE_XP: Record<Grade, number> = { yana: 1, qiyin: 3, yaxshi: 3, oson: 3 };
+
 export default function CardsScreen({ navigation }: Props) {
-  const { reviewedCards, markCardReviewed, addXp } = useApp();
+  const { reviewedToday, markCardReviewed, addXp } = useApp();
+  const [selectedDeckId, setSelectedDeckId] = useState<string>(REAL_DECKS[0].id);
   const [index, setIndex] = useState(0);
   const [flipped, setFlipped] = useState(false);
   const [sessionDone, setSessionDone] = useState(false);
 
-  const card = FLASHCARDS[index];
-  const progress = useMemo(
-    () => (FLASHCARDS.length ? index / FLASHCARDS.length : 0),
-    [index],
+  const cardsQuery = useAsync(() => fetchFlashcards(selectedDeckId), [selectedDeckId]);
+  const cards = cardsQuery.data ?? [];
+  const card = cards[index];
+
+  const currentDeck = useMemo(
+    () => REAL_DECKS.find((d) => d.id === selectedDeckId) || REAL_DECKS[0],
+    [selectedDeckId],
   );
+
+  const progress = useMemo(
+    () => (cards.length ? index / cards.length : 0),
+    [index, cards.length],
+  );
+
+  const selectDeck = (deckId: string) => {
+    setSelectedDeckId(deckId);
+    setIndex(0);
+    setFlipped(false);
+    setSessionDone(false);
+  };
+
+  const handleSpeak = (text: string) => {
+    void playTTS(text, 'ja');
+  };
 
   const grade = (g: Grade) => {
     if (!card) return;
     markCardReviewed(card.id);
-    addXp(g === 'yana' ? 1 : 3);
+    addXp(GRADE_XP[g]);
     setFlipped(false);
 
-    if (index + 1 >= FLASHCARDS.length) {
+    if (index + 1 >= cards.length) {
       setSessionDone(true);
     } else {
       setIndex((i) => i + 1);
@@ -50,6 +75,30 @@ export default function CardsScreen({ navigation }: Props) {
     setFlipped(false);
     setSessionDone(false);
   };
+
+  if (cardsQuery.loading) {
+    return (
+      <View style={styles.container}>
+        <LoadingView label="Kartalar yuklanmoqda…" />
+      </View>
+    );
+  }
+
+  if (cardsQuery.error) {
+    return (
+      <View style={styles.container}>
+        <ErrorView message={cardsQuery.error} onRetry={cardsQuery.reload} />
+      </View>
+    );
+  }
+
+  if (cards.length === 0) {
+    return (
+      <View style={styles.container}>
+        <ErrorView message="Hozircha kartalar mavjud emas" onRetry={cardsQuery.reload} />
+      </View>
+    );
+  }
 
   if (sessionDone) {
     return (
@@ -63,11 +112,11 @@ export default function CardsScreen({ navigation }: Props) {
             Ajoyib! 🎉
           </Text>
           <Text style={styles.doneSub}>
-            {FLASHCARDS.length} ta kartani ko'rib chiqdingiz
+            "{currentDeck.title}" toʻplamidan {cards.length} ta kartani koʻrib chiqdingiz
           </Text>
           <View style={styles.doneStats}>
-            <DoneStat value={`${FLASHCARDS.length * 3}`} label="XP" />
-            <DoneStat value={`${reviewedCards.length}`} label="Kartalar" />
+            <DoneStat value={`${cards.length * 3}`} label="XP" />
+            <DoneStat value={`${reviewedToday}`} label="Kartalar" />
             <DoneStat value="100%" label="Bajarildi" />
           </View>
           <PrimaryButton title="Qaytadan" onPress={restart} style={{ marginTop: spacing.xl }} />
@@ -89,14 +138,37 @@ export default function CardsScreen({ navigation }: Props) {
 
         <View style={styles.head}>
           <Text style={typography.h1}>Flashcards</Text>
-          <Text style={styles.sub}>Make every word stick</Text>
+          <Text style={styles.sub}>{currentDeck.description}</Text>
         </View>
+
+        {/* Deck selection selector */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.deckScroll}
+          contentContainerStyle={styles.deckList}
+        >
+          {REAL_DECKS.map((d) => {
+            const active = d.id === selectedDeckId;
+            return (
+              <Pressable
+                key={d.id}
+                onPress={() => selectDeck(d.id)}
+                style={[styles.deckTab, active && styles.deckTabActive]}
+              >
+                <Text style={[styles.deckTabText, active && styles.deckTabTextActive]}>
+                  {d.title.split(' ')[0]} {d.level} ({d.cardCount})
+                </Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
 
         <View style={styles.progressRow}>
           <Text style={styles.progressText}>
-            {index + 1} / {FLASHCARDS.length}
+            {index + 1} / {cards.length}
           </Text>
-          <Text style={styles.progressXp}>SM-2 rejim</Text>
+          <Text style={styles.progressXp}>SM-2 Spaced Repetition</Text>
         </View>
         <View style={{ paddingHorizontal: spacing.xl }}>
           <ProgressBar progress={progress} />
@@ -111,10 +183,16 @@ export default function CardsScreen({ navigation }: Props) {
             <View style={styles.cardTop}>
               <View style={styles.deckChip}>
                 <Ionicons name="albums" size={12} color={colors.primary} />
-                <Text style={styles.deckChipText}>N3 · So'zlar</Text>
+                <Text style={styles.deckChipText}>
+                  {currentDeck.level} · {currentDeck.title}
+                </Text>
               </View>
-              <Pressable hitSlop={10} onPress={() => {}}>
-                <Ionicons name="star-outline" size={22} color={colors.textMuted} />
+              <Pressable
+                hitSlop={10}
+                onPress={() => handleSpeak(card.frontJa || card.front)}
+                style={styles.audioBtn}
+              >
+                <Ionicons name="volume-medium" size={22} color={colors.primary} />
               </Pressable>
             </View>
 
@@ -122,7 +200,7 @@ export default function CardsScreen({ navigation }: Props) {
               {!flipped ? (
                 <>
                   <Text style={styles.front}>{card.front}</Text>
-                  {card.frontJa ? (
+                  {card.frontJa && card.frontJa !== card.front ? (
                     <Text style={styles.frontJa}>{card.frontJa}</Text>
                   ) : null}
                 </>
@@ -147,7 +225,7 @@ export default function CardsScreen({ navigation }: Props) {
                 style={{ transform: [{ rotate: '180deg' }] }}
               />
               <Text style={styles.flipHint}>
-                {flipped ? 'Oldini ko\'rish' : 'Joyini ko\'rish uchun bosing'}
+                {flipped ? 'Old qismini koʻrish' : 'Tarjima va oʻqilishini koʻrish'}
               </Text>
             </View>
           </View>
@@ -163,7 +241,7 @@ export default function CardsScreen({ navigation }: Props) {
           </View>
         ) : (
           <PrimaryButton
-            title="Javobni ko'rsatish"
+            title="Javobni koʻrsatish"
             variant="secondary"
             onPress={() => setFlipped(true)}
             style={{ marginHorizontal: spacing.xl, marginTop: spacing.xl }}
@@ -171,7 +249,7 @@ export default function CardsScreen({ navigation }: Props) {
         )}
 
         <Text style={styles.hint}>
-          Kartani {"o'ngga/songa"} siljiting yoki bosing
+          Yaponcha talaffuzni eshitish uchun 🔊 tugmasini bosing
         </Text>
       </ScrollView>
     </View>
@@ -199,7 +277,7 @@ function GradeBtn({
   onPress: () => void;
 }) {
   return (
-    <Pressable style={[styles.grade, { borderColor: `${color}55` }]} onPress={onPress}>
+    <Pressable style={[styles.gradeBtn, { borderColor: color }]} onPress={onPress}>
       <Text style={[styles.gradeLabel, { color }]}>{label}</Text>
       <Text style={styles.gradeSub}>{sub}</Text>
     </Pressable>
@@ -208,37 +286,62 @@ function GradeBtn({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
-  scroll: { paddingBottom: spacing.xxxl },
-  head: { paddingHorizontal: spacing.xl },
+  scroll: { paddingBottom: spacing.xxl },
+  head: { paddingHorizontal: spacing.xl, marginTop: spacing.md, marginBottom: spacing.md },
   sub: { ...typography.bodySecondary, marginTop: 4 },
+  deckScroll: { marginBottom: spacing.md },
+  deckList: { paddingHorizontal: spacing.xl, gap: spacing.sm },
+  deckTab: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.pill,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  deckTabActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  deckTabText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.textSecondary,
+  },
+  deckTabTextActive: {
+    color: colors.white,
+  },
   progressRow: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: spacing.xl,
-    marginTop: spacing.lg,
-    marginBottom: spacing.sm,
+    marginTop: spacing.sm,
+    marginBottom: spacing.xs,
   },
   progressText: { fontSize: 13, fontWeight: '700', color: colors.text },
-  progressXp: { fontSize: 13, fontWeight: '600', color: colors.primary },
-  cardWrap: { paddingHorizontal: spacing.xl, marginTop: spacing.xl },
+  progressXp: { ...typography.caption, color: colors.primary, fontWeight: '700' },
+  cardWrap: {
+    paddingHorizontal: spacing.xl,
+    marginTop: spacing.lg,
+  },
   card: {
+    minHeight: 280,
     backgroundColor: colors.card,
-    borderRadius: radius.xl,
+    borderRadius: radius.xxl,
     borderWidth: 1,
     borderColor: colors.border,
     padding: spacing.xl,
-    minHeight: 300,
     justifyContent: 'space-between',
     ...shadow.card,
   },
   cardBack: {
-    backgroundColor: colors.primarySoft,
-    borderColor: colors.primary,
+    borderColor: colors.primaryLight,
   },
   cardTop: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    justifyContent: 'space-between',
   },
   deckChip: {
     flexDirection: 'row',
@@ -246,87 +349,117 @@ const styles = StyleSheet.create({
     gap: 6,
     backgroundColor: colors.primaryLight,
     paddingHorizontal: spacing.md,
-    paddingVertical: 5,
+    paddingVertical: 4,
     borderRadius: radius.pill,
   },
   deckChipText: { fontSize: 11, fontWeight: '700', color: colors.primary },
+  audioBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   cardCenter: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: spacing.xxl,
+    paddingVertical: spacing.xl,
+    gap: spacing.sm,
   },
-  front: { fontSize: 56, fontWeight: '800', color: colors.text, textAlign: 'center' },
-  frontJa: { fontSize: 16, color: colors.textSecondary, marginTop: spacing.sm },
-  back: { fontSize: 30, fontWeight: '800', color: colors.primary, textAlign: 'center' },
-  reading: { fontSize: 15, color: colors.textSecondary, marginTop: spacing.sm },
-  example: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    marginTop: spacing.lg,
+  front: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: colors.text,
     textAlign: 'center',
-    lineHeight: 21,
-    fontStyle: 'italic',
+  },
+  frontJa: {
+    fontSize: 18,
+    fontWeight: '500',
+    color: colors.textSecondary,
+  },
+  back: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: colors.text,
+    textAlign: 'center',
+  },
+  reading: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.primary,
+  },
+  example: {
+    ...typography.bodySecondary,
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: spacing.sm,
+    lineHeight: 18,
   },
   cardFooter: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: spacing.sm,
+    gap: 6,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.divider,
   },
-  flipHint: { fontSize: 12, color: colors.textMuted, fontWeight: '600' },
+  flipHint: { ...typography.caption },
   grades: {
     flexDirection: 'row',
     gap: spacing.sm,
     paddingHorizontal: spacing.xl,
     marginTop: spacing.xl,
   },
-  grade: {
+  gradeBtn: {
     flex: 1,
     backgroundColor: colors.card,
+    borderRadius: radius.lg,
     borderWidth: 1.5,
-    borderRadius: radius.md,
     paddingVertical: spacing.md,
     alignItems: 'center',
+    ...shadow.card,
   },
-  gradeLabel: { fontSize: 14, fontWeight: '800' },
-  gradeSub: { fontSize: 10, color: colors.textMuted, marginTop: 2 },
+  gradeLabel: { fontSize: 13, fontWeight: '800' },
+  gradeSub: { ...typography.caption, fontSize: 10, marginTop: 2 },
   hint: {
     ...typography.caption,
     textAlign: 'center',
     marginTop: spacing.lg,
-    color: colors.textMuted,
   },
   doneWrap: {
     flex: 1,
+    padding: spacing.xl,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: spacing.xxl,
   },
   doneIcon: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
+    width: 88,
+    height: 88,
+    borderRadius: 44,
     backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: spacing.xl,
+    marginBottom: spacing.lg,
+    ...shadow.floating,
   },
-  doneSub: { ...typography.bodySecondary, marginTop: spacing.sm, textAlign: 'center' },
+  doneSub: { ...typography.bodySecondary, textAlign: 'center', marginTop: spacing.xs },
   doneStats: {
     flexDirection: 'row',
     gap: spacing.md,
-    marginTop: spacing.xxl,
+    marginTop: spacing.xl,
+    width: '100%',
   },
   doneStat: {
+    flex: 1,
     backgroundColor: colors.card,
+    borderRadius: radius.lg,
+    padding: spacing.md,
+    alignItems: 'center',
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: radius.lg,
-    paddingVertical: spacing.lg,
-    paddingHorizontal: spacing.xl,
-    alignItems: 'center',
-    minWidth: 92,
   },
-  doneStatValue: { fontSize: 20, fontWeight: '800', color: colors.primary },
-  doneStatLabel: { fontSize: 11, color: colors.textSecondary, marginTop: 2 },
+  doneStatValue: { fontSize: 18, fontWeight: '800', color: colors.text },
+  doneStatLabel: { ...typography.caption, marginTop: 2 },
 });

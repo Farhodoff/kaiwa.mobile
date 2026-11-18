@@ -6,66 +6,18 @@ import { colors, radius, spacing, typography } from '../theme';
 import { RootStackParamList } from '../navigation/types';
 import { Card } from '../components/Card';
 import { ScreenHeader } from '../components/ScreenHeader';
+import { ErrorView, LoadingView } from '../components/StateView';
+import { useAsync } from '../hooks/useAsync';
+import {
+  NotificationRow,
+  fetchNotifications,
+  markNotificationRead,
+  notificationIcon,
+  seedWelcomeNotification,
+} from '../services/progress';
+import { useAuth } from '../store/AuthContext';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Notifications'>;
-
-type Notif = {
-  id: string;
-  icon: keyof typeof Ionicons.glyphMap;
-  title: string;
-  body: string;
-  time: string;
-  type: 'daily' | 'streak' | 'system' | 'achievement';
-  unread: boolean;
-};
-
-const INITIAL: Notif[] = [
-  {
-    id: 'n1',
-    icon: 'flame',
-    title: 'Streak saqlandi! 🔥',
-    body: '12 kunlik streakni davom ettiring — bugun 20 daqiqa o\'qing.',
-    time: 'Hozir',
-    type: 'streak',
-    unread: true,
-  },
-  {
-    id: 'n2',
-    icon: 'mic',
-    title: 'Kaiwa AI suhbatga tayyor',
-    body: '"At the café" mavzusida yangi suhbat kutmoqda.',
-    time: '2 soat oldin',
-    type: 'daily',
-    unread: true,
-  },
-  {
-    id: 'n3',
-    icon: 'albums',
-    title: 'Kartalar muddati keldi',
-    body: '18 ta karta takrorlashga tayyor (SM-2).',
-    time: 'Bugun 09:00',
-    type: 'daily',
-    unread: false,
-  },
-  {
-    id: 'n4',
-    icon: 'trophy',
-    title: 'Yangi yutuq ochildi',
-    body: '"Birinchi suhbat" yutuqini qo\'lga kiritdingiz.',
-    time: 'Kecha',
-    type: 'achievement',
-    unread: false,
-  },
-  {
-    id: 'n5',
-    icon: 'ribbon',
-    title: 'JLPT mock imtihon',
-    body: 'Haftalik mock imtihon har payshanba kunida.',
-    time: '2 kun oldin',
-    type: 'system',
-    unread: false,
-  },
-];
 
 const FILTERS = [
   { id: 'all', label: 'Barchasi' },
@@ -74,22 +26,66 @@ const FILTERS = [
   { id: 'achievement', label: 'Yutuqlar' },
 ] as const;
 
+function timeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return 'Hozir';
+  if (min < 60) return `${min} daqiqa oldin`;
+  const hours = Math.floor(min / 60);
+  if (hours < 24) return `${hours} soat oldin`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return 'Kecha';
+  return `${days} kun oldin`;
+}
+
 export default function NotificationsScreen({ navigation }: Props) {
-  const [items, setItems] = useState(INITIAL);
+  const { user } = useAuth();
+  const userId = user?.id ?? '';
   const [filter, setFilter] = useState<(typeof FILTERS)[number]['id']>('all');
 
+  const query = useAsync(async () => {
+    await seedWelcomeNotification(userId);
+    return fetchNotifications(userId);
+  }, [userId]);
+
+  const items: NotificationRow[] = query.data ?? [];
   const visible = items.filter((i) => filter === 'all' || i.type === filter);
-  const unreadCount = items.filter((i) => i.unread).length;
+  const unreadCount = items.filter((i) => !i.isRead).length;
 
-  const markAllRead = () =>
-    setItems((prev) => prev.map((i) => ({ ...i, unread: false })));
+  const markAllRead = () => {
+    items.forEach((i) => {
+      if (!i.isRead) markNotificationRead(userId, i.id).catch(() => undefined);
+    });
+    query.reload();
+  };
 
-  const toggleRead = (id: string) =>
-    setItems((prev) =>
-      prev.map((i) => (i.id === id ? { ...i, unread: !i.unread } : i)),
+  const toggleRead = (id: string) => {
+    markNotificationRead(userId, id).catch(() => undefined);
+    query.reload();
+  };
+
+  const clearAll = () => {
+    import('../lib/supabase').then(({ supabase }) =>
+      supabase.from('user_notifications').delete().eq('user_id', userId),
     );
+    setTimeout(() => query.reload(), 400);
+  };
 
-  const clearAll = () => setItems([]);
+  if (query.loading) {
+    return (
+      <View style={styles.container}>
+        <LoadingView label="Bildirishnomalar yuklanmoqda…" />
+      </View>
+    );
+  }
+
+  if (query.error) {
+    return (
+      <View style={styles.container}>
+        <ErrorView message={query.error} onRetry={query.reload} />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -141,34 +137,38 @@ export default function NotificationsScreen({ navigation }: Props) {
           </Card>
         ) : (
           <View style={styles.list}>
-            {visible.map((n) => (
+            {visible.map((n) => {
+              const unread = !n.isRead;
+              const icon = notificationIcon(n.type) as keyof typeof Ionicons.glyphMap;
+              return (
               <Pressable key={n.id} onPress={() => toggleRead(n.id)}>
-                <Card style={[styles.row, n.unread && styles.rowUnread]}>
+                <Card style={[styles.row, unread && styles.rowUnread]}>
                   <View
                     style={[
                       styles.rowIcon,
-                      n.unread && { backgroundColor: colors.primaryLight },
+                      unread && { backgroundColor: colors.primaryLight },
                     ]}
                   >
                     <Ionicons
-                      name={n.icon}
+                      name={icon}
                       size={19}
-                      color={n.unread ? colors.primary : colors.textMuted}
+                      color={unread ? colors.primary : colors.textMuted}
                     />
                   </View>
                   <View style={{ flex: 1 }}>
                     <View style={styles.rowHead}>
-                      <Text style={[styles.rowTitle, n.unread && { fontWeight: '800' }]}>
+                      <Text style={[styles.rowTitle, unread && { fontWeight: '800' }]}>
                         {n.title}
                       </Text>
-                      {n.unread ? <View style={styles.dot} /> : null}
+                      {unread ? <View style={styles.dot} /> : null}
                     </View>
-                    <Text style={styles.rowBody}>{n.body}</Text>
-                    <Text style={styles.rowTime}>{n.time}</Text>
+                    <Text style={styles.rowBody}>{n.message}</Text>
+                    <Text style={styles.rowTime}>{timeAgo(n.createdAt)}</Text>
                   </View>
                 </Card>
               </Pressable>
-            ))}
+              );
+            })}
           </View>
         )}
 

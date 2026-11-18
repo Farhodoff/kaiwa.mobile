@@ -6,6 +6,7 @@ import { colors, radius, spacing, typography } from '../theme';
 import { AuthStackParamList } from '../navigation/types';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { ProgressBar } from '../components/ProgressBar';
+import { useApp } from '../store/AppContext';
 
 type Props = NativeStackScreenProps<AuthStackParamList, 'OnboardingDaily'>;
 
@@ -18,6 +19,13 @@ const GOALS = [
 
 export default function OnboardingDailyScreen({ navigation }: Props) {
   const [minutes, setMinutes] = useState(20);
+  const { setDailyGoal } = useApp();
+
+  const continueNext = () => {
+    // Persist the chosen daily goal to `mobile_user_progress`.
+    setDailyGoal(minutes);
+    navigation.navigate('OnboardingReady');
+  };
 
   return (
     <View style={styles.container}>
@@ -71,7 +79,7 @@ export default function OnboardingDailyScreen({ navigation }: Props) {
       <View style={styles.footer}>
         <PrimaryButton
           title="Davom etish"
-          onPress={() => navigation.navigate('OnboardingReady')}
+          onPress={continueNext}
         />
       </View>
     </View>

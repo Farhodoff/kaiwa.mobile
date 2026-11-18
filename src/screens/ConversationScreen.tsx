@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -11,34 +11,88 @@ import {
 } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, radius, spacing, typography } from '../theme';
+import { colors, radius, spacing } from '../theme';
 import { RootStackParamList } from '../navigation/types';
 import { ScreenHeader } from '../components/ScreenHeader';
-import { AI_REPLIES } from '../data/content';
+import { ErrorView, LoadingView } from '../components/StateView';
+import { useAsync } from '../hooks/useAsync';
+import { fetchAiReplies } from '../services/content';
+import { CoachTurn, askCoach } from '../services/coach';
+import { playTTS, stopTTS } from '../services/tts';
+import { fetchSpeechToken } from '../services/speech';
 import { useApp } from '../store/AppContext';
+import { REAL_SCENARIOS } from '../data/scenarios';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Conversation'>;
-type Msg = { id: string; from: 'me' | 'ai'; text: string; uz?: string };
+type Msg = {
+  id: string;
+  from: 'me' | 'ai';
+  text: string;
+  uz?: string;
+  feedback?: string;
+  words?: string[];
+};
 
 let seq = 0;
 const nextId = () => `m${++seq}`;
 
 export default function ConversationScreen({ route, navigation }: Props) {
-  const { topic, level } = route.params;
-  const { addXp } = useApp();
-  const [messages, setMessages] = useState<Msg[]>([
-    {
-      id: nextId(),
-      from: 'ai',
-      text: 'いらっしゃいませ！今日は何にしますか？',
-      uz: 'Xush kelibsiz! Bugun nima olmoqchisiz?',
-    },
-  ]);
+  const { topic, level, topicId } = route.params;
+  const { addXp, registerConversation } = useApp();
+  const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
   const [listening, setListening] = useState(false);
   const [thinking, setThinking] = useState(false);
+  /** Whether the live AI proxy answered at least once this session. */
+  const [live, setLive] = useState<'unknown' | 'live' | 'offline'>('unknown');
   const scrollRef = useRef<React.ElementRef<typeof ScrollView>>(null);
-  const replyIndex = useRef(1);
+  const replyIndex = useRef(0);
+  const sendingRef = useRef(false);
+  const messagesRef = useRef<Msg[]>([]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  const scenario = useMemo(
+    () => (topicId ? REAL_SCENARIOS.find((s) => s.id === topicId) : null),
+    [topicId],
+  );
+
+  const repliesQuery = useAsync(() => fetchAiReplies(topicId), [topicId]);
+  const replies = useMemo(() => repliesQuery.data ?? [], [repliesQuery.data]);
+
+  // Seed the opening line once replies or scenario are loaded.
+  useEffect(() => {
+    if (messagesRef.current.length === 0) {
+      if (scenario?.opening_line_ja) {
+        const lineJa = scenario.opening_line_ja;
+        const lineUz = scenario.opening_line_uz || scenario.description_uz;
+        setMessages([{ id: nextId(), from: 'ai', text: lineJa, uz: lineUz }]);
+        void playTTS(lineJa, 'ja').catch(() => {});
+      } else if (replies.length > 0) {
+        setMessages([{ id: nextId(), from: 'ai', text: replies[0].ja, uz: replies[0].uz }]);
+        replyIndex.current = 1 % replies.length;
+        void playTTS(replies[0].ja, 'ja').catch(() => {});
+      }
+    }
+  }, [scenario, replies]);
+
+  // Stop ongoing TTS audio when unmounting
+  useEffect(() => {
+    return () => {
+      void stopTTS();
+    };
+  }, []);
+
+  // Register the conversation as done when leaving with real dialogue.
+  useEffect(
+    () => () => {
+      if (messagesRef.current.filter((m) => m.from === 'me').length > 0) {
+        registerConversation(3);
+      }
+    },
+    [registerConversation],
+  );
 
   const push = (msg: Msg) => {
     setMessages((prev) => [...prev, msg]);
@@ -47,33 +101,97 @@ export default function ConversationScreen({ route, navigation }: Props) {
     );
   };
 
-  const send = (text?: string) => {
+  const send = async (text?: string) => {
     const value = (text ?? input).trim();
-    if (!value) return;
-    push({ id: nextId(), from: 'me', text: value });
+    if (!value || sendingRef.current) return;
+    sendingRef.current = true;
+
+    const mine: Msg = { id: nextId(), from: 'me', text: value };
+    push(mine);
     setInput('');
     setThinking(true);
 
-    const reply = AI_REPLIES[replyIndex.current % AI_REPLIES.length];
-    replyIndex.current += 1;
+    // Last 12 turns give the coach enough context without bloating the request.
+    const history: CoachTurn[] = [...messagesRef.current, mine]
+      .filter((m) => m.text.trim().length > 0)
+      .slice(-12)
+      .map((m) => ({ role: m.from === 'me' ? 'user' : 'assistant', content: m.text }));
 
-    setTimeout(() => {
+    try {
+      const res = await askCoach({
+        topic,
+        level,
+        history,
+        contextPrompt: scenario?.context_prompt,
+      });
+      setLive('live');
+      push({
+        id: nextId(),
+        from: 'ai',
+        text: res.reply,
+        uz: res.replyUz,
+        feedback: res.feedback || undefined,
+        words: res.newWords
+          .map((w) => [w.word, w.meaning].filter(Boolean).join(' — '))
+          .filter((w) => w.length > 0),
+      });
+      // Speak AI reply via Neural TTS
+      void playTTS(res.reply, 'ja').catch(() => {});
+    } catch {
+      // Provider unreachable — keep the lesson alive with the scripted replies
+      // stored in PostgreSQL instead of showing an error mid-conversation.
+      setLive('offline');
+      const fallback = replies.length
+        ? replies[replyIndex.current % replies.length]
+        : { ja: 'すみません、もう一度お願いします。', uz: 'Kechirasiz, yana bir marta bering.' };
+      replyIndex.current += 1;
+      push({ id: nextId(), from: 'ai', text: fallback.ja, uz: fallback.uz });
+      void playTTS(fallback.ja, 'ja').catch(() => {});
+    } finally {
+      sendingRef.current = false;
       setThinking(false);
-      push({ id: nextId(), from: 'ai', text: reply.ja, uz: reply.uz });
       addXp(5);
-    }, 900);
-  };
-
-  const toggleMic = () => {
-    setListening((v) => !v);
-    if (!listening) {
-      // Simulate speech recognition result after a moment.
-      setTimeout(() => {
-        setListening(false);
-        send('これをください。');
-      }, 1400);
     }
   };
+
+  const toggleMic = async () => {
+    if (listening) {
+      setListening(false);
+      return;
+    }
+    // Instant barge-in: stop any playing coach voice
+    await stopTTS();
+    setListening(true);
+    try {
+      // Connect to Azure Speech token endpoint to verify quota and token validity
+      await fetchSpeechToken().catch((err) => {
+        console.warn('[speech-token] Warning:', err);
+      });
+      // Voice recognition simulation fallback
+      setTimeout(() => {
+        setListening(false);
+        void send('これをください。');
+      }, 1400);
+    } catch {
+      setListening(false);
+    }
+  };
+
+  if (repliesQuery.loading) {
+    return (
+      <View style={styles.container}>
+        <LoadingView label="Suhbat yuklanmoqda…" />
+      </View>
+    );
+  }
+
+  if (repliesQuery.error) {
+    return (
+      <View style={styles.container}>
+        <ErrorView message={repliesQuery.error} onRetry={repliesQuery.reload} />
+      </View>
+    );
+  }
 
   return (
     <KeyboardAvoidingView
@@ -85,9 +203,24 @@ export default function ConversationScreen({ route, navigation }: Props) {
         subtitle={`${level} · Kaiwa AI`}
         onBack={() => navigation.goBack()}
         right={
-          <View style={styles.scorePill}>
-            <Ionicons name="sparkles" size={14} color={colors.primary} />
-            <Text style={styles.scoreText}>+5 XP</Text>
+          <View style={styles.headerRight}>
+            <View style={[styles.statusPill, live === 'offline' && styles.statusPillOffline]}>
+              <View
+                style={[
+                  styles.statusDot,
+                  live === 'offline' && { backgroundColor: colors.textMuted },
+                ]}
+              />
+              <Text
+                style={[styles.statusText, live === 'offline' && { color: colors.textMuted }]}
+              >
+                {live === 'live' ? 'Jonli' : live === 'offline' ? 'Oflayn' : 'AI'}
+              </Text>
+            </View>
+            <View style={styles.scorePill}>
+              <Ionicons name="sparkles" size={14} color={colors.primary} />
+              <Text style={styles.scoreText}>+5 XP</Text>
+            </View>
           </View>
         }
       />
@@ -116,15 +249,43 @@ export default function ConversationScreen({ route, navigation }: Props) {
                 m.from === 'me' ? styles.bubbleMe : styles.bubbleAi,
               ]}
             >
-              <Text
-                style={[
-                  styles.bubbleText,
-                  m.from === 'me' && styles.bubbleTextMe,
-                ]}
-              >
-                {m.text}
-              </Text>
+              <View style={styles.bubbleTopRow}>
+                <Text
+                  style={[
+                    styles.bubbleText,
+                    m.from === 'me' && styles.bubbleTextMe,
+                  ]}
+                >
+                  {m.text}
+                </Text>
+                {m.from === 'ai' ? (
+                  <Pressable
+                    onPress={() => {
+                      void playTTS(m.text, 'ja');
+                    }}
+                    hitSlop={8}
+                    style={styles.speakerBtn}
+                  >
+                    <Ionicons name="volume-medium-outline" size={16} color={colors.primary} />
+                  </Pressable>
+                ) : null}
+              </View>
               {m.uz ? <Text style={styles.bubbleUz}>{m.uz}</Text> : null}
+              {m.feedback ? (
+                <View style={styles.feedbackRow}>
+                  <Ionicons name="bulb-outline" size={13} color={colors.warning} />
+                  <Text style={styles.feedbackText}>{m.feedback}</Text>
+                </View>
+              ) : null}
+              {m.words && m.words.length > 0 ? (
+                <View style={styles.wordsRow}>
+                  {m.words.map((w) => (
+                    <View key={w} style={styles.wordChip}>
+                      <Text style={styles.wordChipText}>{w}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
             </View>
           </View>
         ))}
@@ -152,6 +313,28 @@ export default function ConversationScreen({ route, navigation }: Props) {
         </View>
       ) : null}
 
+      {scenario?.key_phrases && scenario.key_phrases.length > 0 ? (
+        <View style={styles.phrasesBar}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.phrasesScroll}
+          >
+            {scenario.key_phrases.map((phrase, idx) => (
+              <Pressable
+                key={idx}
+                style={styles.phraseChip}
+                onPress={() => {
+                  setInput((prev) => (prev ? `${prev} ${phrase}` : phrase));
+                }}
+              >
+                <Text style={styles.phraseChipText}>💬 {phrase}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
+      ) : null}
+
       <View style={styles.inputBar}>
         <Pressable
           onPress={toggleMic}
@@ -169,11 +352,15 @@ export default function ConversationScreen({ route, navigation }: Props) {
           placeholderTextColor={colors.textMuted}
           value={input}
           onChangeText={setInput}
-          onSubmitEditing={() => send()}
+          onSubmitEditing={() => {
+            void send();
+          }}
           returnKeyType="send"
         />
         <Pressable
-          onPress={() => send()}
+          onPress={() => {
+            void send();
+          }}
           style={[styles.sendBtn, !input.trim() && styles.sendBtnDisabled]}
           disabled={!input.trim()}
         >
@@ -195,6 +382,19 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: radius.pill,
   },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: `${colors.success}1f`,
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: 5,
+    borderRadius: radius.pill,
+  },
+  statusPillOffline: { backgroundColor: colors.divider },
+  statusDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.success },
+  statusText: { fontSize: 11, fontWeight: '700', color: colors.success },
   scoreText: { fontSize: 12, fontWeight: '700', color: colors.primary },
   messages: { padding: spacing.lg, paddingBottom: spacing.xl, gap: spacing.md },
   bubbleRow: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing.sm },
@@ -224,6 +424,16 @@ const styles = StyleSheet.create({
     borderColor: colors.primary,
     borderBottomRightRadius: 6,
   },
+  bubbleTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: spacing.xs,
+  },
+  speakerBtn: {
+    padding: 2,
+    marginLeft: 4,
+  },
   bubbleText: { fontSize: 15, color: colors.text, lineHeight: 21 },
   bubbleTextMe: { color: colors.white, fontWeight: '600' },
   bubbleUz: {
@@ -232,6 +442,29 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontStyle: 'italic',
   },
+  feedbackRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 5,
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.divider,
+  },
+  feedbackText: { flex: 1, fontSize: 12, color: colors.textSecondary, lineHeight: 17 },
+  wordsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: spacing.sm,
+  },
+  wordChip: {
+    backgroundColor: colors.primaryLight,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: 3,
+  },
+  wordChipText: { fontSize: 11, fontWeight: '600', color: colors.primary },
   typing: { color: colors.textMuted, fontWeight: '800', letterSpacing: 2 },
   listening: {
     flexDirection: 'row',
@@ -247,6 +480,30 @@ const styles = StyleSheet.create({
   listeningBars: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   bar: { width: 4, borderRadius: 2, backgroundColor: colors.primary },
   listeningText: { fontSize: 13, fontWeight: '600', color: colors.primary },
+  phrasesBar: {
+    paddingVertical: spacing.xs,
+    backgroundColor: colors.card,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  phrasesScroll: {
+    paddingHorizontal: spacing.lg,
+    gap: spacing.sm,
+    paddingVertical: 2,
+  },
+  phraseChip: {
+    backgroundColor: colors.primaryLight,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: `${colors.primary}22`,
+  },
+  phraseChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.primary,
+  },
   inputBar: {
     flexDirection: 'row',
     alignItems: 'center',

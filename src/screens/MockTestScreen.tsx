@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
@@ -8,7 +8,9 @@ import { Card } from '../components/Card';
 import { ProgressBar } from '../components/ProgressBar';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { ScreenHeader } from '../components/ScreenHeader';
-import { MOCK_TEST } from '../data/content';
+import { ErrorView, LoadingView } from '../components/StateView';
+import { useAsync } from '../hooks/useAsync';
+import { fetchQuizQuestions } from '../services/content';
 import { useApp } from '../store/AppContext';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'MockTest'>;
@@ -21,8 +23,9 @@ function fmt(sec: number) {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-export default function MockTestScreen({ navigation }: Props) {
+export default function MockTestScreen({ route, navigation }: Props) {
   const { addXp } = useApp();
+  const level = route.params?.level || 'N3';
   const [started, setStarted] = useState(false);
   const [index, setIndex] = useState(0);
   const [picked, setPicked] = useState<number | null>(null);
@@ -31,7 +34,9 @@ export default function MockTestScreen({ navigation }: Props) {
   const [finished, setFinished] = useState(false);
   const [awarded, setAwarded] = useState(false);
 
-  const q = MOCK_TEST[index];
+  const quizQuery = useAsync(() => fetchQuizQuestions('mock', level), [level]);
+  const questions = useMemo(() => quizQuery.data ?? [], [quizQuery.data]);
+  const q = questions[index];
   const answered = picked !== null;
 
   // Simple countdown (runs only while the test is in progress).
@@ -51,13 +56,13 @@ export default function MockTestScreen({ navigation }: Props) {
   }, [started, finished]);
 
   const choose = (i: number) => {
-    if (answered) return;
+    if (answered || !q) return;
     setPicked(i);
     setAnswers((a) => ({ ...a, [q.id]: i }));
   };
 
   const next = () => {
-    if (index + 1 >= MOCK_TEST.length) {
+    if (index + 1 >= questions.length) {
       setFinished(true);
       return;
     }
@@ -65,10 +70,29 @@ export default function MockTestScreen({ navigation }: Props) {
     setPicked(null);
   };
 
-  const score = MOCK_TEST.reduce(
+  const score = questions.reduce(
     (s, item) => s + (answers[item.id] === item.correctIndex ? 1 : 0),
     0,
   );
+
+  if (quizQuery.loading) {
+    return (
+      <View style={styles.container}>
+        <LoadingView label="Mock test yuklanmoqda…" />
+      </View>
+    );
+  }
+
+  if (quizQuery.error || questions.length === 0) {
+    return (
+      <View style={styles.container}>
+        <ErrorView
+          message={quizQuery.error ?? 'Mock test savollari topilmadi'}
+          onRetry={quizQuery.reload}
+        />
+      </View>
+    );
+  }
 
   if (!started) {
     return (
@@ -79,14 +103,14 @@ export default function MockTestScreen({ navigation }: Props) {
             <Ionicons name="ribbon" size={44} color={colors.white} />
           </View>
           <Text style={[typography.h1, { textAlign: 'center' }]}>
-            JLPT {MOCK_TEST.length > 0 ? 'N3' : ''} Mock imtihon
+            JLPT {level} Mock imtihon
           </Text>
           <Text style={styles.startSub}>
             Real imtihon muhitida o'z bilimingizni sinab ko'ring
           </Text>
 
           <Card style={styles.specCard}>
-            <SpecRow icon="help-circle-outline" label="Savollar" value={`${MOCK_TEST.length}`} />
+            <SpecRow icon="help-circle-outline" label="Savollar" value={`${questions.length}`} />
             <View style={styles.sep} />
             <SpecRow icon="time-outline" label="Vaqt" value={`${Math.round(TIME_LIMIT / 60)} daqiqa`} />
             <View style={styles.sep} />
@@ -120,7 +144,7 @@ export default function MockTestScreen({ navigation }: Props) {
   }
 
   if (finished) {
-    const pct = Math.round((score / MOCK_TEST.length) * 100);
+    const pct = Math.round((score / questions.length) * 100);
     const passed = pct >= 60;
     if (!awarded) {
       setAwarded(true);
@@ -151,13 +175,13 @@ export default function MockTestScreen({ navigation }: Props) {
             {passed ? "Siz o'tdingiz! 🎉" : "Bu safar o'tmadingiz 😔"}
           </Text>
           <Text style={styles.startSub}>
-            {score} / {MOCK_TEST.length} ta to'g'ri javob · {pct}%
+            {score} / {questions.length} ta to'g'ri javob · {pct}%
           </Text>
 
           <Card style={styles.specCard}>
             <SpecRow icon="checkmark-circle-outline" label="To'g'ri" value={`${score}`} />
             <View style={styles.sep} />
-            <SpecRow icon="close-circle-outline" label="Noto'g'ri" value={`${MOCK_TEST.length - score}`} />
+            <SpecRow icon="close-circle-outline" label="Noto'g'ri" value={`${questions.length - score}`} />
             <View style={styles.sep} />
             <SpecRow icon="flash-outline" label="Yig'ilgan XP" value={`+${score * 15}`} />
           </Card>
@@ -193,7 +217,7 @@ export default function MockTestScreen({ navigation }: Props) {
   return (
     <View style={styles.container}>
       <ScreenHeader
-        title={`Savol ${index + 1}/${MOCK_TEST.length}`}
+        title={`Savol ${index + 1}/${questions.length}`}
         subtitle="N3 · Mock test"
         onBack={() => navigation.goBack()}
         right={
@@ -211,7 +235,7 @@ export default function MockTestScreen({ navigation }: Props) {
       />
       <View style={{ paddingHorizontal: spacing.xl }}>
         <ProgressBar
-          progress={(index + (answered ? 1 : 0)) / MOCK_TEST.length}
+          progress={(index + (answered ? 1 : 0)) / questions.length}
           color={colors.accent}
         />
       </View>
@@ -272,7 +296,7 @@ export default function MockTestScreen({ navigation }: Props) {
         <View style={styles.footer}>
           <PrimaryButton
             title={
-              index + 1 >= MOCK_TEST.length ? "Imtihonni yakunlash" : 'Keyingi savol'
+              index + 1 >= questions.length ? "Imtihonni yakunlash" : 'Keyingi savol'
             }
             onPress={next}
             variant="primary"

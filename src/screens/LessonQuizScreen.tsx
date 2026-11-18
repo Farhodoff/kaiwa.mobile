@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
@@ -8,25 +8,29 @@ import { Card } from '../components/Card';
 import { ProgressBar } from '../components/ProgressBar';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { ScreenHeader } from '../components/ScreenHeader';
-import { LESSON_QUIZ } from '../data/content';
+import { ErrorView, LoadingView } from '../components/StateView';
+import { useAsync } from '../hooks/useAsync';
+import { fetchQuizQuestions } from '../services/content';
 import { useApp } from '../store/AppContext';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'LessonQuiz'>;
 
 export default function LessonQuizScreen({ route, navigation }: Props) {
-  const { title, level } = route.params;
-  const { addXp } = useApp();
+  const { lessonId, title, level } = route.params;
+  const { addXp, saveLessonScore } = useApp();
 
   const [index, setIndex] = useState(0);
   const [picked, setPicked] = useState<number | null>(null);
   const [correctCount, setCorrectCount] = useState(0);
   const [finished, setFinished] = useState(false);
 
-  const q = LESSON_QUIZ[index];
+  const quizQuery = useAsync(() => fetchQuizQuestions('lesson', lessonId), [lessonId]);
+  const questions = useMemo(() => quizQuery.data ?? [], [quizQuery.data]);
+  const q = questions[index];
   const answered = picked !== null;
 
   const choose = (i: number) => {
-    if (answered) return;
+    if (answered || !q) return;
     setPicked(i);
     if (i === q.correctIndex) {
       setCorrectCount((c) => c + 1);
@@ -37,16 +41,44 @@ export default function LessonQuizScreen({ route, navigation }: Props) {
   };
 
   const next = () => {
-    if (index + 1 >= LESSON_QUIZ.length) {
+    if (index + 1 >= questions.length) {
       setFinished(true);
+      const pct = questions.length
+        ? Math.round((correctCount / questions.length) * 100)
+        : 0;
+      // Persist the quiz result against the lesson.
+      saveLessonScore(lessonId, {
+        progress: 1,
+        isCompleted: pct >= 60,
+        score: pct,
+      });
       return;
     }
     setIndex((i) => i + 1);
     setPicked(null);
   };
 
+  if (quizQuery.loading) {
+    return (
+      <View style={styles.container}>
+        <LoadingView label="Savollar yuklanmoqda…" />
+      </View>
+    );
+  }
+
+  if (quizQuery.error || questions.length === 0) {
+    return (
+      <View style={styles.container}>
+        <ErrorView
+          message={quizQuery.error ?? 'Bu dars uchun savollar topilmadi'}
+          onRetry={quizQuery.reload}
+        />
+      </View>
+    );
+  }
+
   if (finished) {
-    const pct = Math.round((correctCount / LESSON_QUIZ.length) * 100);
+    const pct = Math.round((correctCount / questions.length) * 100);
     return (
       <View style={styles.container}>
         <ScreenHeader
@@ -69,13 +101,13 @@ export default function LessonQuizScreen({ route, navigation }: Props) {
             {pct >= 80 ? 'Barakalla! 🎉' : pct >= 50 ? 'Yaxshi! 👏' : "Qaytadan urinib ko'ring 💪"}
           </Text>
           <Text style={styles.resultSub}>
-            {correctCount} / {LESSON_QUIZ.length} ta savol to'g'ri · {title} · {level}
+            {correctCount} / {questions.length} ta savol to'g'ri · {title} · {level}
           </Text>
 
           <Card style={styles.resultCard}>
             <ResultRow label="To'g'ri javoblar" value={`${correctCount}`} />
             <View style={styles.sep} />
-            <ResultRow label="Noto'g'ri" value={`${LESSON_QUIZ.length - correctCount}`} />
+            <ResultRow label="Noto'g'ri" value={`${questions.length - correctCount}`} />
             <View style={styles.sep} />
             <ResultRow label="Yig'ilgan XP" value={`+${correctCount * 10}`} accent />
           </Card>
@@ -107,17 +139,16 @@ export default function LessonQuizScreen({ route, navigation }: Props) {
     <View style={styles.container}>
       <ScreenHeader
         title={title}
-        subtitle={`${level} · Savol ${index + 1}/${LESSON_QUIZ.length}`}
+        subtitle={`${level} · Savol ${index + 1}/${questions.length}`}
         onBack={() => navigation.goBack()}
       />
       <View style={{ paddingHorizontal: spacing.xl }}>
-        <ProgressBar progress={(index + (answered ? 1 : 0)) / LESSON_QUIZ.length} />
+        <ProgressBar progress={(index + (answered ? 1 : 0)) / questions.length} />
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <View style={styles.questionWrap}>
           <Text style={styles.question}>{q.question}</Text>
-          {q.questionJa ? <Text style={styles.questionJa}>{q.questionJa}</Text> : null}
         </View>
 
         <View style={styles.options}>
@@ -198,7 +229,7 @@ export default function LessonQuizScreen({ route, navigation }: Props) {
       {answered ? (
         <View style={styles.footer}>
           <PrimaryButton
-            title={index + 1 >= LESSON_QUIZ.length ? 'Natijani ko\'rish' : 'Keyingi savol'}
+            title={index + 1 >= questions.length ? 'Natijani ko\'rish' : 'Keyingi savol'}
             onPress={next}
           />
         </View>

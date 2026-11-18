@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { CompositeScreenProps } from '@react-navigation/native';
 import { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
@@ -10,28 +10,72 @@ import { Card } from '../components/Card';
 import { ProgressBar } from '../components/ProgressBar';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { ScreenHeader } from '../components/ScreenHeader';
-import { LESSONS, USER } from '../data/content';
+import { ErrorView, LoadingView } from '../components/StateView';
+import { useAsync } from '../hooks/useAsync';
+import { GREETING, lastDays } from '../lib/dates';
+import { computeLessonStatuses, fetchLessons } from '../services/content';
 import { useApp } from '../store/AppContext';
+import { useAuth } from '../store/AuthContext';
 
 type Props = CompositeScreenProps<
   BottomTabScreenProps<MainTabParamList, 'Home'>,
   NativeStackScreenProps<RootStackParamList>
 >;
 
-const WEEK = [
-  { d: 'Du', done: true },
-  { d: 'Se', done: true },
-  { d: 'Ch', done: true },
-  { d: 'Pa', done: true },
-  { d: 'Ju', done: true },
-  { d: 'Sh', done: false },
-  { d: 'Ya', done: false },
-];
-
 export default function HomeScreen({ navigation }: Props) {
-  const { xp, xpGoal, streak, level, levelProgress, dailyGoalDone, dailyGoal } =
-    useApp();
-  const current = LESSONS.find((l) => l.status === 'current')!;
+  const { user } = useAuth();
+  const {
+    xp,
+    streak,
+    level,
+    levelProgress,
+    dailyGoalDone,
+    dailyGoal,
+    wordsLearned,
+    activity,
+    lessonProgress,
+    loading: progressLoading,
+  } = useApp();
+
+  const lessonsQuery = useAsync(() => fetchLessons(), []);
+
+  const lessons = useMemo(
+    () =>
+      lessonsQuery.data ? computeLessonStatuses(lessonsQuery.data, lessonProgress) : null,
+    [lessonsQuery.data, lessonProgress],
+  );
+
+  const current = useMemo(
+    () => lessons?.find((l) => l.status === 'current') ?? lessons?.[0] ?? null,
+    [lessons],
+  );
+
+  const week = useMemo(() => {
+    const byDay = new Map(activity.map((a) => [a.day, a]));
+    return lastDays(7).map(({ key, label }) => ({
+      d: label,
+      done: (byDay.get(key)?.xp ?? 0) > 0,
+    }));
+  }, [activity]);
+
+  const name = user?.name?.trim() || 'Doʻstim';
+  const greeting = GREETING;
+
+  if (lessonsQuery.loading || progressLoading) {
+    return (
+      <View style={styles.container}>
+        <LoadingView label="Maʼlumotlar yuklanmoqda…" />
+      </View>
+    );
+  }
+
+  if (lessonsQuery.error || !current) {
+    return (
+      <View style={styles.container}>
+        <ErrorView message={lessonsQuery.error ?? undefined} onRetry={lessonsQuery.reload} />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -58,7 +102,7 @@ export default function HomeScreen({ navigation }: Props) {
                 style={styles.avatar}
                 onPress={() => navigation.navigate('Settings')}
               >
-                <Text style={styles.avatarText}>{USER.name[0]}</Text>
+                <Text style={styles.avatarText}>{name[0]?.toUpperCase()}</Text>
               </Pressable>
             </View>
           }
@@ -66,7 +110,9 @@ export default function HomeScreen({ navigation }: Props) {
 
         {/* Greeting */}
         <View style={styles.greeting}>
-          <Text style={typography.h1}>{USER.greeting}, {USER.name} 👋</Text>
+          <Text style={typography.h1}>
+            {greeting}, {name} 👋
+          </Text>
           <Text style={styles.greetingSub}>
             Bugungi maqsaddan {Math.max(0, dailyGoal - dailyGoalDone)} daqiqa qoldi
           </Text>
@@ -93,7 +139,7 @@ export default function HomeScreen({ navigation }: Props) {
               <View style={[styles.statIcon, { backgroundColor: colors.successLight }]}>
                 <Ionicons name="albums" size={18} color={colors.success} />
               </View>
-              <Text style={styles.statValue}>{USER.words}</Text>
+              <Text style={styles.statValue}>{wordsLearned}</Text>
               <Text style={styles.statLabel}>So'zlar</Text>
             </Card>
           </View>
@@ -143,7 +189,7 @@ export default function HomeScreen({ navigation }: Props) {
             <Text style={styles.cardHeadRight}>7 kun</Text>
           </View>
           <View style={styles.weekRow}>
-            {WEEK.map((w) => (
+            {week.map((w) => (
               <View key={w.d} style={styles.weekItem}>
                 <View style={[styles.weekDot, w.done && styles.weekDotDone]}>
                   {w.done ? (

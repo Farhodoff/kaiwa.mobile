@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
@@ -7,30 +7,81 @@ import { RootStackParamList } from '../navigation/types';
 import { Card } from '../components/Card';
 import { ProgressBar } from '../components/ProgressBar';
 import { ScreenHeader } from '../components/ScreenHeader';
+import { lastDays } from '../lib/dates';
 import { useApp } from '../store/AppContext';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Progress'>;
 
-const MONTH = [
-  { d: 'O', v: 0.3 },
-  { d: 'T', v: 0.55 },
-  { d: 'Ch', v: 0.4 },
-  { d: 'P', v: 0.8 },
-  { d: 'J', v: 0.65 },
-  { d: 'Sh', v: 1 },
-  { d: 'Y', v: 0.45 },
-];
-
-const SKILLS = [
-  { label: "So'zlar", value: 0.78, color: colors.primary, icon: 'text' },
-  { label: 'Grammatika', value: 0.64, color: colors.info, icon: 'code-slash' },
-  { label: 'O\'qish', value: 0.52, color: colors.warning, icon: 'book' },
-  { label: 'Tinglash', value: 0.47, color: colors.success, icon: 'headset' },
-  { label: 'Gapirish', value: 0.71, color: colors.accent, icon: 'mic' },
-] as const;
+const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
 export default function ProgressScreen({ navigation }: Props) {
-  const { xp, streak, wordsLearned, level, levelProgress, reviewedToday } = useApp();
+  const {
+    xp,
+    streak,
+    wordsLearned,
+    level,
+    levelProgress,
+    reviewedToday,
+    conversationsDone,
+    lessonsDone,
+    activity,
+    lessonProgress,
+  } = useApp();
+
+  // Last 7 days of XP, normalized against the best day.
+  const week = useMemo(() => {
+    const byDay = new Map(activity.map((a) => [a.day, a.xp]));
+    const days = lastDays(7).map(({ key, label }) => ({
+      d: label,
+      v: byDay.get(key) ?? 0,
+    }));
+    const max = Math.max(1, ...days.map((d) => d.v));
+    return days.map((d) => ({ d: d.d, v: d.v === 0 ? 0 : Math.max(0.12, d.v / max) }));
+  }, [activity]);
+
+  // Skills derived from real progress instead of hardcoded percentages.
+  const scores = Object.values(lessonProgress)
+    .map((p) => Number(p.score ?? 0))
+    .filter((s) => s > 0);
+  const avgQuiz = scores.length
+    ? scores.reduce((s, v) => s + v, 0) / scores.length / 100
+    : 0;
+
+  const skills = useMemo(
+    () => [
+      {
+        label: "So'zlar",
+        value: clamp01(wordsLearned / 200),
+        color: colors.primary,
+        icon: 'text',
+      },
+      {
+        label: 'Grammatika',
+        value: clamp01(avgQuiz),
+        color: colors.info,
+        icon: 'code-slash',
+      },
+      {
+        label: "O'qish",
+        value: clamp01(lessonsDone / 50),
+        color: colors.warning,
+        icon: 'book',
+      },
+      {
+        label: 'Tinglash',
+        value: clamp01(reviewedToday / 20),
+        color: colors.success,
+        icon: 'headset',
+      },
+      {
+        label: 'Gapirish',
+        value: clamp01(conversationsDone / 10),
+        color: colors.accent,
+        icon: 'mic',
+      },
+    ],
+    [wordsLearned, avgQuiz, lessonsDone, reviewedToday, conversationsDone],
+  );
 
   return (
     <View style={styles.container}>
@@ -57,7 +108,7 @@ export default function ProgressScreen({ navigation }: Props) {
             </View>
           </View>
           <View style={styles.chart}>
-            {MONTH.map((m, i) => (
+            {week.map((m, i) => (
               <View key={i} style={styles.barCol}>
                 <View style={styles.barTrack}>
                   <View
@@ -95,7 +146,7 @@ export default function ProgressScreen({ navigation }: Props) {
         {/* Skills */}
         <Text style={[typography.h3, styles.sectionTitle]}>Ko'nikmalar</Text>
         <Card>
-          {SKILLS.map((s, i) => (
+          {skills.map((s, i) => (
             <View key={s.label}>
               <View style={styles.skillRow}>
                 <View style={[styles.skillIcon, { backgroundColor: `${s.color}1F` }]}>
@@ -107,7 +158,7 @@ export default function ProgressScreen({ navigation }: Props) {
                 </Text>
               </View>
               <ProgressBar progress={s.value} color={s.color} height={6} />
-              {i < SKILLS.length - 1 ? <View style={styles.skillGap} /> : null}
+              {i < skills.length - 1 ? <View style={styles.skillGap} /> : null}
             </View>
           ))}
         </Card>
@@ -115,10 +166,10 @@ export default function ProgressScreen({ navigation }: Props) {
         {/* Achievements */}
         <Text style={[typography.h3, styles.sectionTitle]}>Yutuqlar</Text>
         <View style={styles.achvRow}>
-          <Achv icon="flame" label={`${streak} kun`} active />
-          <Achv icon="mic" label="Suhbat" active />
-          <Achv icon="book" label="50 dars" />
-          <Achv icon="trophy" label={level} active />
+          <Achv icon="flame" label={`${streak} kun`} active={streak >= 3} />
+          <Achv icon="mic" label="Suhbat" active={conversationsDone >= 1} />
+          <Achv icon="book" label="50 dars" active={lessonsDone >= 50} />
+          <Achv icon="trophy" label={level} active={levelProgress >= 1} />
         </View>
 
         {/* Review summary */}

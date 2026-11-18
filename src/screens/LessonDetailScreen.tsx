@@ -2,73 +2,65 @@ import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, radius, shadow, spacing, typography } from '../theme';
+import { colors, radius, spacing, typography } from '../theme';
 import { RootStackParamList } from '../navigation/types';
 import { Card } from '../components/Card';
 import { ProgressBar } from '../components/ProgressBar';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { ScreenHeader } from '../components/ScreenHeader';
+import { ErrorView, LoadingView } from '../components/StateView';
+import { useAsync } from '../hooks/useAsync';
+import { fetchLesson } from '../services/content';
+import { playTTS } from '../services/tts';
 import { useApp } from '../store/AppContext';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'LessonDetail'>;
 
 type Section = 'vocab' | 'grammar' | 'phrases';
 
-const VOCAB = [
-  { ja: 'コーヒー', romaji: 'koohii', uz: 'qahva' },
-  { ja: 'お願いします', romaji: 'onegai shimasu', uz: 'Iltimos' },
-  { ja: '美味しい', romaji: 'oishii', uz: 'mazali' },
-  { ja: 'お会計', romaji: 'okaikei', uz: 'hisob' },
-  { ja: 'レシート', romaji: 'reshiito', uz: 'chek' },
-];
-
-const GRAMMAR = [
-  {
-    pattern: '〜をください',
-    meaning: '…ni bering',
-    example: 'コーヒーをください。 — Qahva bering.',
-  },
-  {
-    pattern: '〜ましょう',
-    meaning: '…qilaylik',
-    example: '飲みましょう。 — Ichamiz.',
-  },
-  {
-    pattern: '〜たいです',
-    meaning: '…moqchiman',
-    example: '食べたいです — Yemoqchiman',
-  },
-];
-
-const PHRASES = [
-  { ja: 'いらっしゃいませ！', uz: 'Xush kelibsiz!' },
-  { ja: '何にしますか？', uz: 'Nima olmoqchisiz?' },
-  { ja: '少々お待ちください', uz: 'Biroz kuting' },
-  { ja: 'お会計です', uz: 'Hisobingiz' },
-];
-
 export default function LessonDetailScreen({ route, navigation }: Props) {
-  const { title, level } = route.params;
-  const { addXp } = useApp();
+  const { lessonId, title, level } = route.params;
+  const { addXp, learnWord, saveLessonScore } = useApp();
   const [section, setSection] = useState<Section>('vocab');
   const [learned, setLearned] = useState<string[]>([]);
 
+  const lessonQuery = useAsync(() => fetchLesson(lessonId), [lessonId]);
+  const lesson = lessonQuery.data;
+  const vocab = lesson?.content.vocab ?? [];
+  const grammar = lesson?.content.grammar ?? [];
+  const phrases = lesson?.content.phrases ?? [];
+
+  const total = vocab.length + grammar.length + phrases.length;
+  const done = learned.length;
+
   const toggleLearned = (key: string) => {
-    setLearned((prev) => {
-      if (prev.includes(key)) return prev.filter((k) => k !== key);
-      addXp(2);
-      return [...prev, key];
+    if (learned.includes(key)) return;
+    const nextDone = done + 1;
+    setLearned((prev) => [...prev, key]);
+    addXp(2);
+    // Only vocabulary items count toward "words learned".
+    if (key.startsWith('v')) learnWord();
+    // Persist lesson progress so Home/Learn reflect the real percentage.
+    saveLessonScore(lessonId, {
+      progress: total ? Math.min(1, nextDone / total) : 0,
+      isCompleted: total > 0 && nextDone >= total,
+      score: null,
     });
   };
 
-  const total = VOCAB.length + GRAMMAR.length + PHRASES.length;
-  const done = learned.length;
+  if (lessonQuery.loading) {
+    return (
+      <View style={styles.container}>
+        <LoadingView label="Dars yuklanmoqda…" />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
       <ScreenHeader
-        title={title}
-        subtitle={`${level} · Dars materiallari`}
+        title={lesson?.title ?? title}
+        subtitle={`${lesson?.level ?? level} · Dars materiallari`}
         onBack={() => navigation.goBack()}
         right={
           <View style={styles.xpPill}>
@@ -119,12 +111,22 @@ export default function LessonDetailScreen({ route, navigation }: Props) {
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         {section === 'vocab' ? (
           <View style={styles.list}>
-            {VOCAB.map((v, i) => {
+            {vocab.map((v, i) => {
               const key = `v${i}`;
               const isLearned = learned.includes(key);
               return (
                 <Pressable key={key} onPress={() => toggleLearned(key)}>
                   <Card style={[styles.row, isLearned && styles.rowLearned]}>
+                    <Pressable
+                      hitSlop={8}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        void playTTS(v.ja, 'ja');
+                      }}
+                      style={styles.speaker}
+                    >
+                      <Ionicons name="volume-medium" size={18} color={colors.primary} />
+                    </Pressable>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.ja}>{v.ja}</Text>
                       <Text style={styles.romaji}>{v.romaji}</Text>
@@ -151,7 +153,7 @@ export default function LessonDetailScreen({ route, navigation }: Props) {
 
         {section === 'grammar' ? (
           <View style={styles.list}>
-            {GRAMMAR.map((g, i) => {
+            {grammar.map((g, i) => {
               const key = `g${i}`;
               const isLearned = learned.includes(key);
               return (
@@ -160,7 +162,19 @@ export default function LessonDetailScreen({ route, navigation }: Props) {
                     <View style={{ flex: 1 }}>
                       <Text style={styles.pattern}>{g.pattern}</Text>
                       <Text style={styles.meaning}>{g.meaning}</Text>
-                      <Text style={styles.example}>{g.example}</Text>
+                      {g.example ? (
+                        <Pressable
+                          hitSlop={8}
+                          onPress={(e) => {
+                            e.stopPropagation();
+                            void playTTS(g.example || '', 'ja');
+                          }}
+                          style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}
+                        >
+                          <Ionicons name="volume-medium" size={14} color={colors.primary} />
+                          <Text style={styles.example}>{g.example}</Text>
+                        </Pressable>
+                      ) : null}
                     </View>
                     <View
                       style={[
@@ -183,15 +197,22 @@ export default function LessonDetailScreen({ route, navigation }: Props) {
 
         {section === 'phrases' ? (
           <View style={styles.list}>
-            {PHRASES.map((p, i) => {
+            {phrases.map((p, i) => {
               const key = `p${i}`;
               const isLearned = learned.includes(key);
               return (
                 <Pressable key={key} onPress={() => toggleLearned(key)}>
                   <Card style={[styles.row, isLearned && styles.rowLearned]}>
-                    <View style={styles.speaker}>
+                    <Pressable
+                      hitSlop={8}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        void playTTS(p.ja, 'ja');
+                      }}
+                      style={styles.speaker}
+                    >
                       <Ionicons name="volume-medium" size={18} color={colors.primary} />
-                    </View>
+                    </Pressable>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.jaSm}>{p.ja}</Text>
                       <Text style={styles.uz}>{p.uz}</Text>
@@ -219,7 +240,7 @@ export default function LessonDetailScreen({ route, navigation }: Props) {
           title="Testni boshlash"
           onPress={() =>
             navigation.navigate('LessonQuiz', {
-              lessonId: 'current',
+              lessonId,
               title,
               level,
             })

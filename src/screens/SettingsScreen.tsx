@@ -7,7 +7,6 @@ import { RootStackParamList } from '../navigation/types';
 import { Card } from '../components/Card';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { ScreenHeader } from '../components/ScreenHeader';
-import { USER } from '../data/content';
 import { useApp } from '../store/AppContext';
 import { useAuth } from '../store/AuthContext';
 
@@ -50,11 +49,11 @@ export default function SettingsScreen({ navigation }: Props) {
         <Card style={styles.profile}>
           <View style={styles.avatar}>
             <Text style={styles.avatarText}>
-              {(user?.name || USER.name).charAt(0).toUpperCase()}
+              {(user?.name || 'D').charAt(0).toUpperCase()}
             </Text>
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={typography.title}>{user?.name || USER.name}</Text>
+            <Text style={typography.title}>{user?.name || 'Doʻstim'}</Text>
             <Text style={styles.profileMeta}>
               {user?.email || `${level} · ${streak} kunlik streak`}
             </Text>
@@ -145,7 +144,7 @@ export default function SettingsScreen({ navigation }: Props) {
           style={{ marginTop: spacing.md }}
         />
 
-        <Text style={styles.version}>kaiwa.live v1.3.1 · Made with 💜</Text>
+        <Text style={styles.version}>kaiwa.live v1.3.1</Text>
       </ScrollView>
     </View>
   );

@@ -72,8 +72,8 @@ function AuthNavigator() {
 export default function App() {
   return (
     <SafeAreaProvider>
-      <AppProvider>
-        <AuthProvider>
+      <AuthProvider>
+        <AppProvider>
           <NavigationContainer theme={theme}>
             <StatusBar style="dark" />
             <RootStack.Navigator
@@ -97,8 +97,8 @@ export default function App() {
               <RootStack.Screen name="Settings" component={SettingsScreen} />
             </RootStack.Navigator>
           </NavigationContainer>
-        </AuthProvider>
-      </AppProvider>
+        </AppProvider>
+      </AuthProvider>
     </SafeAreaProvider>
   );
 }
