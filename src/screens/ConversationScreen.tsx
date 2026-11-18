@@ -20,6 +20,7 @@ import { fetchAiReplies } from '../services/content';
 import { CoachTurn, askCoach } from '../services/coach';
 import { playTTS, stopTTS } from '../services/tts';
 import { fetchSpeechToken } from '../services/speech';
+import { startSpeechRecognition, stopSpeechRecognition } from '../services/stt';
 import { useApp } from '../store/AppContext';
 import { REAL_SCENARIOS } from '../data/scenarios';
 
@@ -77,10 +78,11 @@ export default function ConversationScreen({ route, navigation }: Props) {
     }
   }, [scenario, replies]);
 
-  // Stop ongoing TTS audio when unmounting
+  // Stop ongoing TTS audio and STT when unmounting
   useEffect(() => {
     return () => {
       void stopTTS();
+      void stopSpeechRecognition();
     };
   }, []);
 
@@ -157,22 +159,57 @@ export default function ConversationScreen({ route, navigation }: Props) {
   const toggleMic = async () => {
     if (listening) {
       setListening(false);
+      await stopSpeechRecognition({
+        onFinal: (text) => {
+          if (text && text.trim()) {
+            setInput('');
+            void send(text.trim());
+          }
+        },
+        onError: (err) => {
+          console.warn('[STT stop error]:', err);
+        },
+        onEnd: () => {
+          setListening(false);
+        },
+      });
       return;
     }
+
     // Instant barge-in: stop any playing coach voice
     await stopTTS();
     setListening(true);
+
     try {
-      // Connect to Azure Speech token endpoint to verify quota and token validity
-      await fetchSpeechToken().catch((err) => {
-        console.warn('[speech-token] Warning:', err);
-      });
-      // Voice recognition simulation fallback
-      setTimeout(() => {
+      const started = await startSpeechRecognition({
+        onStart: () => {
+          setListening(true);
+        },
+        onPartial: (partial) => {
+          // Show partial recognized text in the input bar in real-time
+          setInput(partial);
+        },
+        onFinal: (finalText) => {
+          if (finalText && finalText.trim()) {
+            setInput('');
+            setListening(false);
+            void send(finalText.trim());
+          }
+        },
+        onError: (err) => {
+          console.warn('[STT Error]:', err);
+          setListening(false);
+        },
+        onEnd: () => {
+          setListening(false);
+        },
+      }, 'ja-JP');
+
+      if (!started) {
         setListening(false);
-        void send('これをください。');
-      }, 1400);
-    } catch {
+      }
+    } catch (err) {
+      console.warn('[STT start failed]:', err);
       setListening(false);
     }
   };
