@@ -223,6 +223,17 @@ export async function fetchFlashcards(deckId: string): Promise<Flashcard[]> {
   }));
 }
 
+/** Exact number of mock questions available for a level (for the JLPT card). */
+export async function countMockQuestions(level: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('mobile_quiz_questions')
+    .select('id', { count: 'exact', head: true })
+    .eq('quiz_type', 'mock')
+    .eq('level', (level || 'N5').toUpperCase());
+  if (error) fail('Savollar sonini o\u2018lab bo\u2018lmadi', error);
+  return count ?? 0;
+}
+
 export async function fetchJlptSections(): Promise<JlptSection[]> {
   const { data, error } = await supabase
     .from('mobile_jlpt_sections')
@@ -260,7 +271,7 @@ export async function fetchConversationTopics(levelFilter?: string): Promise<Con
   let query = supabase
     .from('mobile_scenarios')
     .select(
-      'id, language, title_ja, title_uz, emoji, difficulty, category, description_uz, opening_line_ja, opening_line_uz, context_prompt, key_phrases, sort_order',
+      'id, language, title_ja, title_uz, emoji, difficulty, category, description_uz, opening_line_ja, opening_line_uz, key_phrases, sort_order',
     )
     .order('sort_order', ORDER);
   if (levelFilter && levelFilter !== 'all') {

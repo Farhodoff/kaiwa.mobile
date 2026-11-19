@@ -44,14 +44,15 @@ function buildSystemPrompt(topic: string, level: string, contextPrompt?: string)
       '',
       'CRITICAL JSON OUTPUT FORMAT RULES:',
       '- "reply" contains ONLY the in-character Japanese response (1-2 short sentences).',
-      '- Never put corrections, explanations or Uzbek inside "reply".',
+      '- Never put corrections, explanations, scenario instructions or Uzbek inside "reply".',
       '- End "reply" with one simple question to keep the conversation going.',
       `- Match JLPT ${level} grammar and vocabulary; avoid excessively complex kanji for beginners.`,
       '- "reply_uz" is a natural Uzbek translation of "reply" only.',
-      '- "feedback" is a short Uzbek correction (1 sentence) when the learner made a grammatical/vocabulary mistake; empty string otherwise.',
-      '- "new_words" holds up to 2 useful words from your reply with kana reading and Uzbek meaning.',
+      '- Write ALL Uzbek text (reply_uz, feedback, new_words.meaning) in Latin script (oʻzbek lotin alifbosi). Never use Cyrillic.',
+      '- "feedback" is a short Uzbek correction (1 sentence) ONLY if the learner actually made a grammatical/vocabulary mistake; otherwise exactly "".',
+      '- "new_words" holds up to 2 words that literally appear in "reply", with kana reading and Latin-script Uzbek meaning.',
       '- Return STRICT JSON only, no markdown, no code fences, with the shape:',
-      '{"reply":"<japanese>","reply_uz":"<uzbek translation of reply>","feedback":"<short uzbek correction or empty string>","new_words":[{"word":"<japanese>","reading":"<kana>","meaning":"<uzbek>"}]}',
+      '{"reply":"<japanese>","reply_uz":"<uzbek translation>","feedback":"<uzbek correction or empty string>","new_words":[{"word":"<japanese>","reading":"<kana>","meaning":"<uzbek>"}]}',
     ].join('\n');
   }
 
@@ -64,10 +65,11 @@ function buildSystemPrompt(topic: string, level: string, contextPrompt?: string)
     '- End "reply" with one simple question to keep the conversation going.',
     `- Match JLPT ${level} grammar and vocabulary; avoid rare kanji for beginners.`,
     '- "reply_uz" is a natural Uzbek translation of "reply" only.',
-    '- "feedback" is a short Uzbek correction (1 sentence) when the learner made a mistake; empty string otherwise.',
-    '- "new_words" holds up to 2 useful words from your reply with kana reading and Uzbek meaning.',
+    '- Write ALL Uzbek text (reply_uz, feedback, new_words.meaning) in Latin script (oʻzbek lotin alifbosi). Never use Cyrillic.',
+    '- "feedback" is a short Uzbek correction (1 sentence) only when the learner actually made a mistake; empty string otherwise.',
+    '- "new_words" holds up to 2 words that literally appear in "reply", with kana reading and Latin-script Uzbek meaning.',
     '- Return STRICT JSON only, no markdown, no code fences, with the shape:',
-    '{"reply":"<japanese>","reply_uz":"<uzbek translation of reply>","feedback":"<short uzbek correction or empty string>","new_words":[{"word":"<japanese>","reading":"<kana>","meaning":"<uzbek>"}]}',
+    '{"reply":"<japanese>","reply_uz":"<uzbek translation>","feedback":"<uzbek correction or empty string>","new_words":[{"word":"<japanese>","reading":"<kana>","meaning":"<uzbek>"}]}',
   ].join('\n');
 }
 

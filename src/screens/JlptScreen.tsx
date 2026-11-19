@@ -12,7 +12,7 @@ import { PrimaryButton } from '../components/PrimaryButton';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { ErrorView, LoadingView } from '../components/StateView';
 import { useAsync } from '../hooks/useAsync';
-import { fetchJlptSections } from '../services/content';
+import { countMockQuestions, fetchJlptSections } from '../services/content';
 import { LEVELS } from '../data/content';
 import { useApp } from '../store/AppContext';
 
@@ -26,6 +26,8 @@ export default function JlptScreen({ navigation }: Props) {
   const { jlptDone: progress } = useApp();
 
   const sectionsQuery = useAsync(() => fetchJlptSections(), []);
+  const mockCountQuery = useAsync(() => countMockQuestions(level), [level]);
+  const mockCount = mockCountQuery.data ?? 0;
 
   const sections = useMemo(
     () =>
@@ -152,7 +154,9 @@ export default function JlptScreen({ navigation }: Props) {
           <View style={{ flex: 1 }}>
             <Text style={typography.title}>Mock imtihon</Text>
             <Text style={styles.examMeta}>
-              105 daqiqa · 180 savol · {level}
+              {mockCount > 0
+                ? `105 daqiqa · ${mockCount} savol · ${level}`
+                : `105 daqiqa · ${level}`}
             </Text>
           </View>
           <PrimaryButton
