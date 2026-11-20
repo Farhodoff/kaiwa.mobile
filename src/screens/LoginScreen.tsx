@@ -16,7 +16,7 @@ import { colors, radius, spacing, typography } from '../theme';
 import { AuthStackParamList } from '../navigation/types';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { useAuth } from '../store/AuthContext';
-import { OAuthProvider } from '../services/oauth';
+import { OAuthProvider, getOAuthUnavailableReason } from '../services/oauth';
 import { hasRealBackend } from '../lib/supabase';
 
 type Props = NativeStackScreenProps<AuthStackParamList, 'Login'>;
@@ -35,6 +35,7 @@ export default function LoginScreen({ navigation }: Props) {
   const [socialLoading, setSocialLoading] = useState<OAuthProvider | null>(null);
 
   const isSignup = mode === 'signup';
+  const oauthUnavailable = getOAuthUnavailableReason();
 
   const submit = async () => {
     setError(null);
@@ -225,9 +226,13 @@ export default function LoginScreen({ navigation }: Props) {
           <View style={styles.divider} />
         </View>
 
+        {oauthUnavailable ? (
+          <Text style={[styles.backendHint, { marginBottom: spacing.md }]}>{oauthUnavailable}</Text>
+        ) : null}
+
         <Pressable
-          style={[styles.socialBtn, socialLoading !== null && styles.socialBtnDisabled]}
-          disabled={socialLoading !== null}
+          style={[styles.socialBtn, (socialLoading !== null || !!oauthUnavailable) && styles.socialBtnDisabled]}
+          disabled={socialLoading !== null || !!oauthUnavailable}
           onPress={() => socialSignIn('google')}
         >
           {socialLoading === 'google' ? (
@@ -241,8 +246,8 @@ export default function LoginScreen({ navigation }: Props) {
         </Pressable>
 
         <Pressable
-          style={[styles.socialBtn, socialLoading !== null && styles.socialBtnDisabled]}
-          disabled={socialLoading !== null}
+          style={[styles.socialBtn, (socialLoading !== null || !!oauthUnavailable) && styles.socialBtnDisabled]}
+          disabled={socialLoading !== null || !!oauthUnavailable}
           onPress={() => socialSignIn('apple')}
         >
           {socialLoading === 'apple' ? (

@@ -1,5 +1,6 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, typography } from '../theme';
 
@@ -13,8 +14,14 @@ type Props = {
 };
 
 export function ScreenHeader({ title, subtitle, onBack, right, brand }: Props) {
+  const insets = useSafeAreaInsets();
   return (
-    <View style={styles.container}>
+    <View
+      style={[
+        styles.container,
+        { paddingTop: Math.max(insets.top, spacing.sm) + spacing.xs },
+      ]}
+    >
       <View style={styles.left}>
         {onBack ? (
           <Pressable
@@ -47,7 +54,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: spacing.xl,
-    paddingTop: spacing.sm,
     paddingBottom: spacing.md,
   },
   left: {

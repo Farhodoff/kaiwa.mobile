@@ -27,7 +27,6 @@ export default function SettingsScreen({ navigation }: Props) {
 
   const handleSignOut = async () => {
     await signOut();
-    resetSession();
     // Reset BOTH levels: the root stack back to Auth and the nested auth
     // stack to Login — otherwise the previous Main state stays mounted.
     navigation.reset({

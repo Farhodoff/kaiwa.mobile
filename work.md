@@ -6,6 +6,37 @@ Ro‘yxat joriy kod va loyiha sozlamalariga asoslangan. Jonli backend, qurilmada
 
 Ustuvorlik: **P0** — ma’lumotlar ishonchliligi; **P1** — asosiy funksiyalarni yakunlash; **P2** — sifat va chiqarishga tayyorgarlik; **P3** — keyingi imkoniyatlar.
 
+## Bajarilmoqda — birinchi bosqich (2026-11-19)
+
+- [x] Har bir hisob uchun mahalliy progress nusxasi va diskda saqlanadigan yuborish navbati qo‘shildi. XP, sozlamalar, darslar, karta belgilari va kunlik faollik ketma-ket yuboriladi. Xato foydalanuvchiga ko‘rinadi; faol ilovada 30 soniyada, fondan qaytganda yoki qo‘lda qayta uriniladi.
+- [x] Serverdagi yuklash xatosi bo‘sh/nol progress deb qabul qilinmaydi. Mahalliy nusxa bo‘lmasa qayta urinish oynasi chiqadi; yangi amallar tugamaguncha yuklash oynasi bilan himoyalanadi. Sekin javob yangi o‘zgarishlarni bosmaydi.
+- [x] Darsni qayta tugatish `lessonsDone`ni takror oshirmaydi. Tugallangan darsni qayta ko‘rish avvalgi tugallanish va ballni o‘chirmaydi.
+- [x] Hisobdan chiqishdan `resetSession` chaqiruvi olib tashlandi.
+- [x] Navbat va dars natijalari uchun 10 ta avtomatik test qo‘shildi (`npm test`, Node 22.18+).
+- [ ] iOS/Android’da parvoz rejimi, qayta ishga tushirish, OAuth/onboarding va hisob almashtirish oqimlarini tekshirish.
+- [ ] Bir hisob bir nechta qurilmada ishlaganda konfliktlarni serverda hal qilish. Joriy navbat yakuniy qiymatlarni qayta yuboradi: bitta qurilmada takror yuborish xavfsiz, ammo boshqa qurilmadagi yangi qiymatni bosish xavfi hali mavjud. Shu sabab quyidagi P0 bandlari to‘liq tugallangan deb belgilanmadi.
+
+Chegara: bu bosqich progressni keshlaydi; dars katalogi va audio uchun to‘liq oflayn rejim qo‘shilmadi. Jonli backendda faqat mavjud unique indekslar va foydalanuvchiga tegishlilik siyosatlari o‘qib tekshirildi; yozish amallari yoki sxema o‘zgarishlari bajarilmadi. Darsdagi noyob so‘zlar, haqiqiy daqiqalar va mahalliy kun hisoblari keyingi P0 ishlarida qoladi.
+
+## Audio bo‘yicha bajarilgan ishlar (2026-11-19)
+
+- [x] `expo-av` o‘rniga SDK 57 bilan mos `expo-audio` ulandi; mikrofon ruxsatlari config plugin orqali sozlandi.
+- [x] Native PCM yozuv va brauzer yozuvi haqiqiy 16 kHz / mono / 16-bit WAV formatiga aylantiriladi. Ovoz formati faqat sarlavhada o‘zgartirilmaydi.
+- [x] Mikrofonni yoqish, yozish, matnga aylantirish, ruxsat/xato holatlari ko‘rsatiladi. Chiqishda yozuv yuborilmasdan bekor qilinadi; bir yozuv ikki marta yuborilmaydi.
+- [x] AI ovozi uchun playback tozalash va so‘rovni bekor qilish qo‘shildi. Eski `require()` lint ogohlantirishi olib tashlandi.
+- [x] Brauzerda haqiqiy mikrofon → yaponcha transkripsiya → jonli AI javobi va ovozni qayta eshittirish sinovdan o‘tdi. Brauzer jurnalida xato qayd etilmadi.
+- [x] Audio format, ruxsatni rad etish, kechikkan mikrofon va transkripsiyani bekor qilish uchun 8 ta test qo‘shildi; jami 18 ta test o‘tdi. Lint va typecheck muvaffaqiyatli.
+- [ ] Yangi native build bilan jismoniy iOS/Android qurilmalarda mikrofon va playbackni sinash; ushbu kompyuterda tayyor iPhone simulyatori mavjud emas.
+
+## iPhone Expo Go mosligi — SDK 58
+
+- [x] iPhone’dagi Expo Go SDK 58 talab qilgani uchun loyiha SDK 57’dan SDK 58’ga yangilandi; Expo modullari, React 19.3.0 va React Native 0.88.1 `expo install --fix` bilan moslashtirildi.
+- [x] SDK 58’da `File.write()` asinxron bo‘lgani uchun TTS faylini yozish tugashi kutiladi; bekor qilingan ovoz fayli tozalanadi.
+- [x] SDK 58: Expo Doctor 20/20, lint, typecheck va 18 ta test o‘tdi; iOS uchun bundle xatosiz tayyorlandi.
+- [ ] SDK 58 yangilanishidan keyingi iPhone’dagi ishga tushirish va mikrofon sinovi.
+- [x] iPhone’dan mobil JS bundle yuklangani server jurnalida tasdiqlandi. Google OAuth’dan so‘ng veb dashboard ochilib qolishi aniqlandi; Expo Go’da qo‘llanmaydigan Google/Apple oqimi to‘xtatilib, email/parol yoki mehmon rejimi ko‘rsatiladi.
+- [ ] Google/Apple kirishini alohida native build’da `kaiwa://auth-callback` qaytish manzili bilan yakunlash; Supabase redirect ruxsatlari va telefonda qaytishni tekshirish. Expo Go’dagi web login mobil sessiyani tasdiqlamaydi.
+
 ## P0 — progress va ma’lumotlar ishonchliligi
 
 - [ ] **Progressni saqlash xatolarini yashirmaslik va qayta yuborishni qo‘shish.**
@@ -104,7 +135,7 @@ Ustuvorlik: **P0** — ma’lumotlar ishonchliligi; **P1** — asosiy funksiyala
 - [ ] **Backendni qayta yaratish va ruxsatlarni tekshirish.** Kod ishlatayotgan jadvallar uchun migratsiyalar, indekslar va RLS siyosatlarini repoda hujjatlashtirish. Jonli muhitda borligini alohida tekshirish; bir foydalanuvchi boshqa foydalanuvchi progressini o‘qiy yoki o‘zgartira olmasligini sinash.
 - [ ] **Muhit sozlamalarini aniq ajratish.** `src/lib/supabase.ts` dagi standart loyiha qiymatlari sabab noto‘g‘ri konfiguratsiya yashirinmasin. Development va production konfiguratsiyalarini belgilash; maxfiy server kalitlari mobil to‘plamga kiritilmasin.
 - [ ] **README va versiyalarni yangilash.** README’da SDK 58 / RN 0.88 yozilgan, `package.json` esa Expo 57 / RN 0.86.3. Backend “hali ulanmagan” degan izoh ham joriy servislar bilan mos emas. Sozlamadagi `v1.3.1`ni loyiha `1.0.0` versiyasi bilan yagona manbaga bog‘lash.
-- [ ] **Lint ogohlantirishini bartaraf etish.** `src/services/tts.ts:98` dagi `require()` importini audio yechimiga mos ravishda tartibga keltirish. Tayyorlik mezoni: lint ogohlantirishsiz o‘tadi.
+- [x] **Lint ogohlantirishini bartaraf etish.** TTS `expo-audio`ga o‘tkazildi; eski `require()` olib tashlandi. Lint ogohlantirishsiz o‘tdi.
 - [ ] **Muhim hisoblar uchun avtomatik testlar va CI qo‘shish.** Sana almashishi, streak, takror saqlash, SM-2, XP, auth va so‘rovlar ketma-ketligini qamrab olish. CI’da lint va typecheck bajarilsin; testlar uchun alohida buyruq bo‘lsin.
 - [ ] **Mobil qurilmalarda asosiy oqimlarni tekshirish.** Kichik ekran, safe area, klaviatura, katta shrift, ekran o‘quvchi, Android back, internetsiz holat va uzun ro‘yxatlarni sinash. Uzun ro‘yxatlarda zarur bo‘lsa virtualizatsiya qo‘llash.
 - [ ] **EAS chiqarish sozlamalarini tayyorlash.** Repoda `eas.json` yo‘q. Development/preview/production profillari, iOS bundle ID, Android package, build raqamlari, imzolash va do‘kon metama’lumotlarini tayyorlash. Tayyorlik mezoni: ikkala platforma uchun o‘rnatiladigan preview build olinadi.
@@ -127,6 +158,6 @@ Ustuvorlik: **P0** — ma’lumotlar ishonchliligi; **P1** — asosiy funksiyala
 - `npm run typecheck` — muvaffaqiyatli.
 - `npm run lint` — 0 ta xato, 1 ta ogohlantirish (`src/services/tts.ts:98`, `@typescript-eslint/no-require-imports`).
 - Qurilmadagi sinovlar va jonli backend tekshiruvlari bajarilmadi.
-- Ushbu ish doirasida faqat `work.md` qo‘shildi; mavjud kod o‘zgarishlariga tegilmadi.
+- Yuqoridagi natijalar dastlabki auditga tegishli. Keyingi kod o‘zgarishlari “Bajarilmoqda” bo‘limida qayd etilgan.
 
-Ish boshlash qoidasi: Expo/React Native APIlariga tegishli koddan oldin `package.json` dagi Expo major versiyasiga mos hujjatlarni o‘qish. Hozirgi versiya: `57`; hujjatlar: https://docs.expo.dev/versions/v57.0.0/. Qo‘shimcha yo‘riqnomalar: https://docs.expo.dev/llms.txt. Har bir amalga oshirilgan o‘zgarishdan keyin lint va typecheck bajarish.
+Ish boshlash qoidasi: Expo/React Native APIlariga tegishli koddan oldin `package.json` dagi Expo major versiyasiga mos hujjatlarni o‘qish. Hozirgi versiya: `58`; hujjatlar: https://docs.expo.dev/versions/v58.0.0/. Qo‘shimcha yo‘riqnomalar: https://docs.expo.dev/llms.txt. Har bir amalga oshirilgan o‘zgarishdan keyin lint va typecheck bajarish.

@@ -39,7 +39,7 @@ npm run android  # Android emulyator
 
 ## 🛠 Texnikalar
 
-- **Expo SDK 58** + **React Native 0.88** + **TypeScript**
+- **Expo SDK 58** + **React Native 0.88.1** + **TypeScript**
 - **React Navigation 7** (native-stack + bottom-tabs)
 - **@expo/vector-icons** (Ionicons)
 - `npm run typecheck` — TypeScript tekshiruvi
@@ -61,12 +61,49 @@ mobile/
 │   └── store/AppContext.tsx   # XP, streak, sozlamalar holati
 ```
 
-## 🔌 Backend ulash
+## 🔌 Backend va progress
 
-Hozircha ma'lumotlar `src/data/content.ts` da (demo rejim). Web ilovadagi
-Supabase backendiga ulash uchun:
+Auth, darslar va progress Supabase servislariga ulangan. `.env.example` asosida
+`.env` sozlang. Mobil ilovaga faqat public/publishable kalit qo‘yiladi.
 
-1. `src/services/api.ts` yarating
-2. `@supabase/supabase-js` o'rnatib, `.env` ichida `EXPO_PUBLIC_SUPABASE_URL`
-   va `EXPO_PUBLIC_SUPABASE_ANON_KEY` ni belgilang
-3. `AppContext` ni real ma'lumotlar bilan almashtiring
+Progress har bir hisob uchun qurilmada keshlanadi. Yuborilmagan o‘zgarishlar
+diskdagi navbatda qoladi va faol ilovada 30 soniyada, ilovaga qaytganda yoki
+“Qayta urinish” bosilganda serverga qayta yuboriladi. Dastlabki progressni
+yuklash uchun internet kerak. Dars katalogi va audio hali to‘liq oflayn ishlamaydi.
+
+Bir qurilmadagi qayta yuborish yakuniy qiymatlarni takror oshirmaydi. Bir hisobni
+bir nechta qurilmada bir vaqtda ishlatishda konfliktlarni serverda hal qilish hali
+qo‘shilmagan; eski qurilmadagi navbat yangi qiymatlarni bosishi mumkin.
+
+## Tekshiruvlar
+
+Node 22.18 yoki yangiroq versiyada:
+
+```bash
+npm test
+npm run lint
+npm run typecheck
+```
+
+Navbat testlari internet uzilishi, qayta ishga tushirish, kechikkan javoblar,
+qurilmaga saqlash xatosi, hisoblar ajratilishi va darsni takror tugatishni qamraydi.
+Keyingi ishlar `work.md`da keltirilgan.
+
+## Mikrofon orqali AI bilan suhbat
+
+Speak → mavzu tanlang → mikrofonni bosing → yaponcha gapiring → to‘xtatish
+tugmasini bosing. Bir yozuv 45 soniyagacha davom etadi; keyin ovoz matnga
+aylantirilib, AIga yuboriladi. Ruxsat, yozish va ulanish xatolari ekranda ko‘rsatiladi.
+
+Audio `expo-audio` orqali ishlaydi. iOS/Android ruxsatlari `app.json`dagi config
+plugin orqali sozlanadi; o‘z native ilovangiz uchun ushbu o‘zgarishlardan keyin
+yangi build kerak. Brauzerda mikrofon HTTPS yoki `localhost`da ishlaydi.
+
+Expo Go’da email/parol yoki mehmon rejimidan foydalaning. Google/Apple OAuth
+uchun o‘z native build’ingiz kerak: callback `kaiwa://auth-callback` Supabase
+redirect ruxsatlarida ko‘rsatilishi va telefonda tekshirilishi lozim. Expo Go’da
+social login tugmalari shu sabab faollashtirilmaydi.
+
+2026-11-19 kuni `http://localhost:8081`da haqiqiy mikrofon → yaponcha matn →
+AI javobi oqimi va javobni ovozda qayta eshittirish tekshirildi. Native iOS/Android
+qurilmalarida sinov hali bajarilmagan. `npm test` jami 18 ta testni qamraydi.

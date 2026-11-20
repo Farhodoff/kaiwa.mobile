@@ -11,6 +11,7 @@ import { useAsync } from '../hooks/useAsync';
 import {
   NotificationRow,
   fetchNotifications,
+  isValidUuid,
   markNotificationRead,
   notificationIcon,
   seedWelcomeNotification,
@@ -65,6 +66,10 @@ export default function NotificationsScreen({ navigation }: Props) {
   };
 
   const clearAll = () => {
+    if (!isValidUuid(userId)) {
+      query.reload();
+      return;
+    }
     import('../lib/supabase').then(({ supabase }) =>
       supabase.from('user_notifications').delete().eq('user_id', userId),
     );

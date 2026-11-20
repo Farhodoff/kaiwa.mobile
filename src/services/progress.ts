@@ -92,42 +92,34 @@ const PROGRESS_COLUMNS =
   'xp, xp_goal, streak, level, level_progress, words_learned, daily_goal, daily_goal_done, conversations_done, lessons_done, last_activity_date, notifications_enabled, sound_enabled, jlpt_done';
 
 export async function fetchUserProgress(userId: string): Promise<UserProgress | null> {
-  try {
-    const { data, error } = await supabase
-      .from('mobile_user_progress')
-      .select(PROGRESS_COLUMNS)
-      .eq('user_id', userId)
-      .maybeSingle();
-    if (!error && data) return toProgress(data as ProgressRow);
-  } catch (e) {
-    console.warn('[fetchUserProgress] Offline fallback:', e);
-  }
-  return null;
+  const { data, error } = await supabase
+    .from('mobile_user_progress')
+    .select(PROGRESS_COLUMNS)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? toProgress(data as ProgressRow) : null;
 }
 
-/** Load the user's progress row, creating it on first launch. */
+/** A failed read is not evidence that a user is new. */
 export async function ensureUserProgress(
   userId: string,
   fullName?: string | null,
 ): Promise<UserProgress> {
-  try {
-    const existing = await fetchUserProgress(userId);
-    if (existing) return existing;
-
-    const { data, error } = await supabase
-      .from('mobile_user_progress')
-      .insert({ user_id: userId, full_name: fullName ?? null })
-      .select(PROGRESS_COLUMNS)
-      .single();
-    if (!error && data) {
-      return toProgress(data as ProgressRow);
-    }
+  const existing = await fetchUserProgress(userId);
+  if (existing) return existing;
+  const { data, error } = await supabase
+    .from('mobile_user_progress')
+    .insert({ user_id: userId, full_name: fullName ?? null })
+    .select(PROGRESS_COLUMNS)
+    .single();
+  if (!error && data) return toProgress(data as ProgressRow);
+  // Another device may have created the row concurrently.
+  if (error?.code === '23505') {
     const again = await fetchUserProgress(userId);
     if (again) return again;
-  } catch (e) {
-    console.warn('[ensureUserProgress] Offline fallback:', e);
   }
-  return DEFAULT_PROGRESS;
+  throw new Error(error?.message ?? 'Progressni yaratib bo‘lmadi');
 }
 
 export async function saveUserProgress(
@@ -164,20 +156,14 @@ export async function saveUserProgress(
 export async function fetchLessonProgressMap(
   userId: string,
 ): Promise<Record<string, LessonProgressRow>> {
-  try {
-    const { data, error } = await supabase
-      .from('mobile_lesson_progress')
-      .select('lesson_id, progress, is_completed, score')
-      .eq('user_id', userId);
-    if (!error && data) {
-      const map: Record<string, LessonProgressRow> = {};
-      for (const row of data) map[row.lesson_id] = row;
-      return map;
-    }
-  } catch (e) {
-    console.warn('[fetchLessonProgressMap] Offline fallback:', e);
-  }
-  return {};
+  const { data, error } = await supabase
+    .from('mobile_lesson_progress')
+    .select('lesson_id, progress, is_completed, score')
+    .eq('user_id', userId);
+  if (error) throw new Error(error.message);
+  const map: Record<string, LessonProgressRow> = {};
+  for (const row of data ?? []) map[row.lesson_id] = row;
+  return map;
 }
 
 export async function saveLessonProgress(
@@ -205,27 +191,22 @@ export async function saveLessonProgress(
 
 /** All card ids the user has ever reviewed (for "words learned" + session guard). */
 export async function fetchReviewedCardIds(userId: string): Promise<string[]> {
-  try {
-    const { data, error } = await supabase
-      .from('mobile_card_reviews')
-      .select('card_id')
-      .eq('user_id', userId);
-    if (!error && data) {
-      return Array.from(new Set(data.map((r) => r.card_id)));
-    }
-  } catch (e) {
-    console.warn('[fetchReviewedCardIds] Offline fallback:', e);
-  }
-  return [];
+  const { data, error } = await supabase
+    .from('mobile_card_reviews')
+    .select('card_id')
+    .eq('user_id', userId);
+  if (error) throw new Error(error.message);
+  return Array.from(new Set((data ?? []).map((r) => r.card_id as string)));
 }
 
 export async function markCardReviewedDb(
   userId: string,
   cardId: string,
   grade = 3,
+  day = new Date().toISOString().slice(0, 10),
 ): Promise<void> {
   const { error } = await supabase.from('mobile_card_reviews').upsert(
-    { user_id: userId, card_id: cardId, reviewed_date: new Date().toISOString().slice(0, 10), grade },
+    { user_id: userId, card_id: cardId, reviewed_date: day, grade },
     { onConflict: 'user_id,card_id,reviewed_date', ignoreDuplicates: true },
   );
   if (error) throw new Error(error.message);
@@ -236,64 +217,24 @@ export async function markCardReviewedDb(
 /* -------------------------------------------------------------------------- */
 
 export async function fetchActivity(userId: string, days = 30): Promise<ActivityRow[]> {
-  try {
-    const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
-    const { data, error } = await supabase
-      .from('mobile_daily_activity')
-      .select('day, xp, minutes')
-      .eq('user_id', userId)
-      .gte('day', since)
-      .order('day', { ascending: false });
-    if (!error && data) {
-      return data.map((r) => ({ day: r.day as string, xp: r.xp, minutes: r.minutes }));
-    }
-  } catch (e) {
-    console.warn('[fetchActivity] Offline fallback:', e);
-  }
-  return [];
-}
-
-/**
- * Read-modify-write is not atomic over REST, so concurrent bumps would lose
- * updates. All activity writes go through one promise chain (FIFO).
- */
-let activityQueue: Promise<unknown> = Promise.resolve();
-
-async function doBumpActivity(
-  userId: string,
-  xp: number,
-  minutes: number,
-): Promise<void> {
-  const day = new Date().toISOString().slice(0, 10);
-  const { data: row } = await supabase
+  const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  const { data, error } = await supabase
     .from('mobile_daily_activity')
-    .select('id, xp, minutes')
+    .select('day, xp, minutes')
     .eq('user_id', userId)
-    .eq('day', day)
-    .maybeSingle();
-
-  if (row) {
-    const { error } = await supabase
-      .from('mobile_daily_activity')
-      .update({ xp: row.xp + xp, minutes: row.minutes + minutes })
-      .eq('id', row.id);
-    if (error) throw new Error(error.message);
-    return;
-  }
-
-  const { error } = await supabase
-    .from('mobile_daily_activity')
-    .insert({ user_id: userId, day, xp, minutes })
-    .select();
-  if (error && error.code !== '23505') throw new Error(error.message);
+    .gte('day', since)
+    .order('day', { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((r) => ({ day: r.day as string, xp: r.xp, minutes: r.minutes }));
 }
 
-/** Enqueue a daily-activity increment so parallel calls never overwrite each other. */
-export function bumpActivity(userId: string, xp = 0, minutes = 0): Promise<void> {
-  activityQueue = activityQueue
-    .then(() => doBumpActivity(userId, xp, minutes))
-    .catch(() => undefined);
-  return activityQueue.then(() => undefined);
+/** Persist the captured total; retrying a lost response must not add XP twice. */
+export async function saveActivity(userId: string, row: ActivityRow): Promise<void> {
+  const { error } = await supabase.from('mobile_daily_activity').upsert(
+    { user_id: userId, ...row },
+    { onConflict: 'user_id,day' },
+  );
+  if (error) throw new Error(error.message);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -308,11 +249,40 @@ const TYPE_ICONS: Record<string, string> = {
   admin: 'ribbon',
 };
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function isValidUuid(str: string): boolean {
+  return typeof str === 'string' && UUID_REGEX.test(str.trim());
+}
+
+const GUEST_NOTIFICATIONS: NotificationRow[] = [
+  {
+    id: 'guest-welcome',
+    title: 'Xush kelibsiz! 👋',
+    message: 'Kaiwa-da yapon tili bo‘yicha birinchi darsingizni boshlang va XP to‘plang.',
+    type: 'system',
+    isRead: false,
+    createdAt: new Date().toISOString(),
+  },
+  {
+    id: 'guest-speaking',
+    title: 'AI Speaking tayyor 🎙️',
+    message: 'Speak bo‘limiga o‘ting va Kaiwa AI bilan real-time suhbat qiling.',
+    type: 'daily',
+    isRead: false,
+    createdAt: new Date().toISOString(),
+  },
+];
+
 export function notificationIcon(type: string): string {
   return TYPE_ICONS[type] ?? 'notifications';
 }
 
 export async function fetchNotifications(userId: string): Promise<NotificationRow[]> {
+  if (!isValidUuid(userId)) {
+    return GUEST_NOTIFICATIONS;
+  }
+
   const { data, error } = await supabase
     .from('user_notifications')
     .select('id, title, message, type, is_read, created_at')
@@ -331,6 +301,12 @@ export async function fetchNotifications(userId: string): Promise<NotificationRo
 }
 
 export async function markNotificationRead(userId: string, id: string): Promise<void> {
+  if (!isValidUuid(userId)) {
+    const item = GUEST_NOTIFICATIONS.find((n) => n.id === id);
+    if (item) item.isRead = true;
+    return;
+  }
+
   const { error } = await supabase
     .from('user_notifications')
     .update({ is_read: true })
@@ -341,6 +317,8 @@ export async function markNotificationRead(userId: string, id: string): Promise<
 
 /** First launch: seed a welcome notification so the screen is not empty. */
 export async function seedWelcomeNotification(userId: string): Promise<void> {
+  if (!isValidUuid(userId)) return;
+
   const existing = await fetchNotifications(userId);
   if (existing.length > 0) return;
   await supabase.from('user_notifications').insert({

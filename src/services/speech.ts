@@ -12,7 +12,7 @@ export type SpeechTokenResponse = {
  * Valid for 10 minutes. Used for real-time speech recognition (STT)
  * and pronunciation assessment.
  */
-export async function fetchSpeechToken(): Promise<SpeechTokenResponse> {
+export async function fetchSpeechToken(signal?: AbortSignal): Promise<SpeechTokenResponse> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   const isGuest = !token;
@@ -25,6 +25,7 @@ export async function fetchSpeechToken(): Promise<SpeechTokenResponse> {
 
   const res = await fetch(url, {
     method: 'GET',
+    signal,
     headers: {
       Authorization: `Bearer ${bearerToken}`,
       apikey: supabaseAnonKey,
@@ -32,9 +33,12 @@ export async function fetchSpeechToken(): Promise<SpeechTokenResponse> {
   });
 
   if (!res.ok) {
-    const errorText = await res.text().catch(() => '');
-    throw new Error(`Speech token error (${res.status}): ${errorText.slice(0, 100)}`);
+    throw new Error(`Nutqni tanish xizmatiga ulanib bo‘lmadi (${res.status}). Qayta urinib ko‘ring.`);
   }
 
-  return (await res.json()) as SpeechTokenResponse;
+  const result = await res.json() as SpeechTokenResponse;
+  if (typeof result.token !== 'string' || !result.token || typeof result.region !== 'string' || !/^[a-z0-9-]+$/.test(result.region)) {
+    throw new Error('Nutqni tanish xizmati noto‘g‘ri javob qaytardi.');
+  }
+  return result;
 }

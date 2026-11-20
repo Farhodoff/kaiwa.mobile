@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import { isRunningInExpoGo } from 'expo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { makeRedirectUri } from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
@@ -23,13 +24,19 @@ const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const providerLabel = (provider: OAuthProvider) =>
   provider === 'google' ? 'Google' : 'Apple';
 
+export function getOAuthUnavailableReason(): string | null {
+  return Platform.OS !== 'web' && isRunningInExpoGo()
+    ? 'Expo Go’da email/parol yoki mehmon rejimi orqali kiring. Google va Apple bilan kirish uchun alohida mobil build kerak.'
+    : null;
+}
+
 /** Where the provider should send the user back. */
 function getRedirectUri(): string {
   if (Platform.OS === 'web') {
     return typeof window !== 'undefined' ? window.location.origin : '';
   }
   // Deep link handled by the app (scheme in app.json).
-  return makeRedirectUri({ scheme: 'kaiwa', path: 'auth-callback' });
+  return makeRedirectUri({ native: 'kaiwa://auth-callback', scheme: 'kaiwa', path: 'auth-callback' });
 }
 
 async function markPending(): Promise<void> {
@@ -152,6 +159,9 @@ async function probeAuthorize(url: string): Promise<string | null> {
  * - web:    full-page redirect (the session is restored on reload)
  */
 export async function signInWithOAuth(provider: OAuthProvider): Promise<OAuthResult> {
+  const unavailable = getOAuthUnavailableReason();
+  if (unavailable) return { ok: false, error: unavailable };
+
   if (!hasRealBackend) {
     // Offline demo mode — no backend credentials configured.
     await delay(600);

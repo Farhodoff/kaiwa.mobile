@@ -1,5 +1,6 @@
 import React from 'react';
 import { Platform, StyleSheet } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, shadow } from '../theme';
@@ -32,13 +33,23 @@ const LABELS: Record<keyof MainTabParamList, string> = {
 };
 
 export default function MainTabs() {
+  const insets = useSafeAreaInsets();
+  const bottomInset = Math.max(insets.bottom, Platform.OS === 'ios' ? 24 : 10);
+  const tabHeight = 58 + bottomInset;
+
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
         headerShown: false,
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.tabInactive,
-        tabBarStyle: styles.tabBar,
+        tabBarStyle: [
+          styles.tabBar,
+          {
+            height: tabHeight,
+            paddingBottom: bottomInset,
+          },
+        ],
         tabBarLabelStyle: styles.tabLabel,
         tabBarItemStyle: { paddingTop: 8 },
         tabBarIcon: ({ focused, color, size }) => {
@@ -68,8 +79,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
     borderTopWidth: 1,
     borderTopColor: colors.border,
-    height: Platform.OS === 'ios' ? 88 : 68,
-    paddingBottom: Platform.OS === 'ios' ? 28 : 10,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     ...shadow.card,

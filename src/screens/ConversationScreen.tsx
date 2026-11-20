@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
+  AppState,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -17,9 +19,11 @@ import { ScreenHeader } from '../components/ScreenHeader';
 import { ErrorView, LoadingView } from '../components/StateView';
 import { useAsync } from '../hooks/useAsync';
 import { fetchScenario } from '../services/content';
-import { CoachTurn, askCoach } from '../services/coach';
+import { CoachTurn, CoachReply, askCoach } from '../services/coach';
 import { playTTS, stopTTS } from '../services/tts';
-import { startSpeechRecognition, stopSpeechRecognition } from '../services/stt';
+import { cancelSpeechRecognition, startSpeechRecognition, stopSpeechRecognition } from '../services/stt';
+import { AudioQueue } from '../services/audioQueue';
+import { streamCoachResponse } from '../services/streamingCoach';
 import { useApp } from '../store/AppContext';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Conversation'>;
@@ -37,15 +41,20 @@ const nextId = () => `m${++seq}`;
 
 export default function ConversationScreen({ route, navigation }: Props) {
   const { topic, level, topicId } = route.params;
-  const { addXp, registerConversation } = useApp();
+  const { addXp, registerConversation, sound } = useApp();
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
-  const [listening, setListening] = useState(false);
+  const [micState, setMicState] = useState<'idle' | 'starting' | 'listening' | 'processing'>('idle');
+  const [speechError, setSpeechError] = useState<string | null>(null);
+  const listening = micState === 'listening';
+  const micBusyRef = useRef(false);
+  const mountedRef = useRef(true);
   const [thinking, setThinking] = useState(false);
   /** Whether the live AI proxy answered at least once this session. */
   const [live, setLive] = useState<'unknown' | 'live' | 'offline'>('unknown');
   const scrollRef = useRef<React.ElementRef<typeof ScrollView>>(null);
   const sendingRef = useRef(false);
+  const audioQueueRef = useRef(new AudioQueue());
   const messagesRef = useRef<Msg[]>([]);
   useEffect(() => {
     messagesRef.current = messages;
@@ -65,21 +74,38 @@ export default function ConversationScreen({ route, navigation }: Props) {
 
   // Play the scenario's opening line once (external system, no state update).
   useEffect(() => {
-    if (openingJa) void playTTS(openingJa, 'ja').catch(() => {});
-  }, [openingJa]);
+    if (openingJa && sound && AppState.currentState === 'active') {
+      void playTTS(openingJa, 'ja').catch(() => {
+        if (mountedRef.current) setSpeechError('Ovoz bloklandi yoki yuklanmadi. Xabar yonidagi ovoz tugmasini bosing.');
+      });
+    }
+  }, [openingJa, sound]);
 
-  // Stop ongoing TTS audio and STT when unmounting
+  // Leaving or backgrounding the screen cancels recording without submitting audio.
   useEffect(() => {
+    mountedRef.current = true;
+    const audioQueue = audioQueueRef.current;
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') {
+        void cancelSpeechRecognition();
+        void stopTTS();
+        void audioQueue.stop();
+        setMicState('idle');
+      }
+    });
     return () => {
+      mountedRef.current = false;
+      subscription.remove();
       void stopTTS();
-      void stopSpeechRecognition();
+      void audioQueue.stop();
+      void cancelSpeechRecognition();
     };
   }, []);
 
   // Register the conversation as done when leaving with real dialogue.
   useEffect(
     () => () => {
-      if (messagesRef.current.filter((m) => m.from === 'me').length > 0) {
+      if (messagesRef.current.some((m) => m.from === 'me') && messagesRef.current.some((m) => m.from === 'ai')) {
         registerConversation(3);
       }
     },
@@ -87,6 +113,7 @@ export default function ConversationScreen({ route, navigation }: Props) {
   );
 
   const push = (msg: Msg) => {
+    if (!mountedRef.current) return;
     setMessages((prev) => [...prev, msg]);
     requestAnimationFrame(() =>
       scrollRef.current?.scrollToEnd({ animated: true }),
@@ -95,13 +122,14 @@ export default function ConversationScreen({ route, navigation }: Props) {
 
   const send = async (text?: string) => {
     const value = (text ?? input).trim();
-    if (!value || sendingRef.current) return;
+    if (!value || sendingRef.current || !mountedRef.current) return;
     sendingRef.current = true;
 
     const mine: Msg = { id: nextId(), from: 'me', text: value };
     push(mine);
     setInput('');
     setThinking(true);
+    setSpeechError(null);
 
     // Last 12 turns give the coach enough context without bloating the request.
     const turns: CoachTurn[] = openingMsg
@@ -116,12 +144,39 @@ export default function ConversationScreen({ route, navigation }: Props) {
       .slice(-12);
 
     try {
-      const res = await askCoach({
-        topic,
-        level,
-        history,
-        contextPrompt: scenario?.context_prompt,
-      });
+      let finalReply: CoachReply | null = null;
+      let streamedSentence = false;
+
+      await streamCoachResponse(
+        {
+          topic,
+          level,
+          history,
+          contextPrompt: scenario?.context_prompt,
+        },
+        {
+          onSentence: (sentence) => {
+            if (sound && AppState.currentState === 'active' && mountedRef.current) {
+              streamedSentence = true;
+              audioQueueRef.current.enqueue(sentence, 'ja');
+            }
+          },
+          onComplete: (res) => {
+            finalReply = res;
+          },
+        },
+      );
+
+      if (!mountedRef.current) return;
+      const res =
+        finalReply ??
+        (await askCoach({
+          topic,
+          level,
+          history,
+          contextPrompt: scenario?.context_prompt,
+        }));
+
       setLive('live');
       push({
         id: nextId(),
@@ -133,11 +188,16 @@ export default function ConversationScreen({ route, navigation }: Props) {
           .map((w) => [w.word, w.meaning].filter(Boolean).join(' — '))
           .filter((w) => w.length > 0),
       });
-      // Speak AI reply via Neural TTS
-      void playTTS(res.reply, 'ja').catch(() => {});
+
+      // If no sentence was streamed, play the complete reply
+      if (!streamedSentence && sound && AppState.currentState === 'active') {
+        audioQueueRef.current.enqueue(res.reply, 'ja');
+      }
+      addXp(5);
     } catch {
       // No scripted fallback: tell the learner the coach is unreachable and
       // let them retry, instead of faking an AI reply.
+      if (!mountedRef.current) return;
       setLive('offline');
       push({
         id: nextId(),
@@ -147,67 +207,45 @@ export default function ConversationScreen({ route, navigation }: Props) {
       });
     } finally {
       sendingRef.current = false;
-      setThinking(false);
-      addXp(5);
+      if (mountedRef.current) setThinking(false);
     }
   };
 
   const toggleMic = async () => {
-    if (listening) {
-      setListening(false);
-      await stopSpeechRecognition({
-        onFinal: (text) => {
-          if (text && text.trim()) {
-            setInput('');
-            void send(text.trim());
-          }
-        },
-        onError: (err) => {
-          console.warn('[STT stop error]:', err);
-        },
-        onEnd: () => {
-          setListening(false);
-        },
-      });
-      return;
-    }
-
-    // Instant barge-in: stop any playing coach voice
-    await stopTTS();
-    setListening(true);
-
+    if (micBusyRef.current || thinking || micState === 'processing') return;
+    micBusyRef.current = true;
+    setSpeechError(null);
     try {
-      const started = await startSpeechRecognition({
-        onStart: () => {
-          setListening(true);
-        },
-        onPartial: (partial) => {
-          // Show partial recognized text in the input bar in real-time
-          setInput(partial);
-        },
-        onFinal: (finalText) => {
-          if (finalText && finalText.trim()) {
-            setInput('');
-            setListening(false);
-            void send(finalText.trim());
-          }
-        },
-        onError: (err) => {
-          console.warn('[STT Error]:', err);
-          setListening(false);
-        },
-        onEnd: () => {
-          setListening(false);
-        },
-      }, 'ja-JP');
-
-      if (!started) {
-        setListening(false);
+      if (listening) {
+        await stopSpeechRecognition();
+        return;
       }
-    } catch (err) {
-      console.warn('[STT start failed]:', err);
-      setListening(false);
-    }
+      setMicState('starting');
+      // Barge-in: immediately stop AI audio when mic is activated
+      await audioQueueRef.current.stop();
+      await stopTTS();
+      await startSpeechRecognition({
+        onStart: () => { if (mountedRef.current) setMicState('listening'); },
+        onProcessing: () => { if (mountedRef.current) setMicState('processing'); },
+        onFinal: (text) => {
+          if (mountedRef.current) void send(text);
+        },
+        onError: (error) => { if (mountedRef.current) setSpeechError(error); },
+        onEnd: () => { if (mountedRef.current) setMicState('idle'); },
+      }, 'ja-JP');
+    } catch (error) {
+      if (mountedRef.current) {
+        setMicState('idle');
+        setSpeechError(error instanceof Error ? error.message : 'Mikrofonni ishga tushirib bo‘lmadi.');
+      }
+    } finally { micBusyRef.current = false; }
+  };
+
+  const speak = (text: string) => {
+    setSpeechError(null);
+    void audioQueueRef.current.stop().then(() => {
+      audioQueueRef.current.enqueue(text, 'ja');
+    });
   };
 
   if (topicId && scenarioQuery.loading) {
@@ -294,9 +332,12 @@ export default function ConversationScreen({ route, navigation }: Props) {
                 {m.from === 'ai' ? (
                   <Pressable
                     onPress={() => {
-                      void playTTS(m.text, 'ja');
+                      speak(m.text);
                     }}
                     hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel="AI javobini eshitish"
+                    disabled={micState !== 'idle'}
                     style={styles.speakerBtn}
                   >
                     <Ionicons name="volume-medium-outline" size={16} color={colors.primary} />
@@ -335,6 +376,17 @@ export default function ConversationScreen({ route, navigation }: Props) {
         ) : null}
       </ScrollView>
 
+      {speechError ? (
+        <View accessibilityLiveRegion="polite" style={styles.speechError}>
+          <Text style={styles.speechErrorText}>{speechError}</Text>
+        </View>
+      ) : null}
+      {micState === 'starting' || micState === 'processing' ? (
+        <View style={styles.listening}>
+          <ActivityIndicator color={colors.primary} />
+          <Text style={styles.listeningText}>{micState === 'starting' ? 'Mikrofon yoqilmoqda…' : 'Nutq matnga aylantirilmoqda…'}</Text>
+        </View>
+      ) : null}
       {listening ? (
         <View style={styles.listening}>
           <View style={styles.listeningBars}>
@@ -342,7 +394,7 @@ export default function ConversationScreen({ route, navigation }: Props) {
               <View key={i} style={[styles.bar, { height: h }]} />
             ))}
           </View>
-          <Text style={styles.listeningText}>Eshitilmoqda…</Text>
+          <Text style={styles.listeningText}>Gapiring, so‘ng to‘xtatish tugmasini bosing (45 soniyagacha).</Text>
         </View>
       ) : null}
 
@@ -370,7 +422,10 @@ export default function ConversationScreen({ route, navigation }: Props) {
 
       <View style={styles.inputBar}>
         <Pressable
-          onPress={toggleMic}
+          onPress={() => { void toggleMic(); }}
+          accessibilityRole="button"
+          accessibilityLabel={listening ? 'Yozishni to‘xtatish va AIga yuborish' : 'Mikrofon orqali gapirish'}
+          disabled={thinking || micState === 'starting' || micState === 'processing'}
           style={[styles.micBtn, listening && styles.micBtnActive]}
         >
           <Ionicons
@@ -383,6 +438,7 @@ export default function ConversationScreen({ route, navigation }: Props) {
           style={styles.input}
           placeholder="Yapon tilida yozing…"
           placeholderTextColor={colors.textMuted}
+          editable={!thinking && micState === 'idle'}
           value={input}
           onChangeText={setInput}
           onSubmitEditing={() => {
@@ -395,7 +451,9 @@ export default function ConversationScreen({ route, navigation }: Props) {
             void send();
           }}
           style={[styles.sendBtn, !input.trim() && styles.sendBtnDisabled]}
-          disabled={!input.trim()}
+          disabled={!input.trim() || thinking || micState !== 'idle'}
+          accessibilityRole="button"
+          accessibilityLabel="Xabarni yuborish"
         >
           <Ionicons name="arrow-up" size={20} color={colors.white} />
         </Pressable>
@@ -512,7 +570,9 @@ const styles = StyleSheet.create({
   },
   listeningBars: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   bar: { width: 4, borderRadius: 2, backgroundColor: colors.primary },
-  listeningText: { fontSize: 13, fontWeight: '600', color: colors.primary },
+  speechError: { marginHorizontal: spacing.lg, padding: spacing.md, backgroundColor: colors.warningLight, borderRadius: radius.md, marginBottom: spacing.sm },
+  speechErrorText: { fontSize: 13, color: colors.text, lineHeight: 19 },
+  listeningText: { flex: 1, fontSize: 13, fontWeight: '600', color: colors.primary },
   phrasesBar: {
     paddingVertical: spacing.xs,
     backgroundColor: colors.card,

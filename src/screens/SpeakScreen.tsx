@@ -71,7 +71,18 @@ export default function SpeakScreen({ navigation }: Props) {
   return (
     <View style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        <ScreenHeader brand title="" />
+        <ScreenHeader
+          brand
+          title=""
+          right={
+            <View style={styles.headerRight}>
+              <View style={styles.statPill}>
+                <Ionicons name="chatbubbles" size={13} color={colors.primary} />
+                <Text style={styles.statPillText}>{conversationsDone} ta suhbat</Text>
+              </View>
+            </View>
+          }
+        />
 
         <View style={styles.head}>
           <Text style={typography.h1}>AI Speaking</Text>
@@ -81,12 +92,17 @@ export default function SpeakScreen({ navigation }: Props) {
         </View>
 
         {/* Big mic hero */}
-        <Pressable onPress={startQuickConversation}>
+        <Pressable
+          onPress={startQuickConversation}
+          style={({ pressed }) => [styles.heroPressable, pressed && { opacity: 0.92 }]}
+        >
           <View style={styles.hero}>
-            <View style={styles.pulseRing} />
-            <View style={styles.pulseRing2} />
-            <View style={styles.micCircle}>
-              <Ionicons name="mic" size={44} color={colors.white} />
+            <View style={styles.micContainer}>
+              <View style={styles.pulseRing} />
+              <View style={styles.pulseRing2} />
+              <View style={styles.micCircle}>
+                <Ionicons name="mic" size={38} color={colors.white} />
+              </View>
             </View>
             <Text style={styles.heroTitle}>Tap to speak</Text>
             <Text style={styles.heroSub}>「タップして話す」</Text>
@@ -217,45 +233,77 @@ export default function SpeakScreen({ navigation }: Props) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   scroll: { paddingBottom: spacing.xxl },
-  head: { paddingHorizontal: spacing.xl, marginTop: spacing.md, marginBottom: spacing.lg },
+  head: { paddingHorizontal: spacing.xl, marginTop: spacing.xs, marginBottom: spacing.md },
   sub: { ...typography.bodySecondary, marginTop: 4 },
-  hero: {
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  statPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: radius.pill,
+    ...shadow.card,
+  },
+  statPillText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  heroPressable: {
     marginHorizontal: spacing.xl,
+  },
+  hero: {
     backgroundColor: colors.primary,
     borderRadius: radius.xxl,
-    paddingVertical: spacing.xxl,
+    paddingVertical: spacing.xl,
     paddingHorizontal: spacing.xl,
     alignItems: 'center',
+    justifyContent: 'center',
     position: 'relative',
     overflow: 'hidden',
     ...shadow.floating,
   },
+  micContainer: {
+    width: 120,
+    height: 120,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
   pulseRing: {
     position: 'absolute',
-    width: 200,
-    height: 200,
-    borderRadius: 100,
-    backgroundColor: 'rgba(255,255,255,0.06)',
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: 'rgba(255,255,255,0.08)',
   },
   pulseRing2: {
     position: 'absolute',
-    width: 150,
-    height: 150,
-    borderRadius: 75,
-    backgroundColor: 'rgba(255,255,255,0.10)',
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    backgroundColor: 'rgba(255,255,255,0.14)',
   },
   micCircle: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
-    backgroundColor: 'rgba(255,255,255,0.22)',
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: 'rgba(255,255,255,0.25)',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 3,
-    borderColor: 'rgba(255,255,255,0.5)',
+    borderWidth: 2.5,
+    borderColor: 'rgba(255,255,255,0.6)',
   },
   heroTitle: {
-    fontSize: 20,
+    fontSize: 19,
     fontWeight: '800',
     color: colors.white,
     marginTop: spacing.md,
