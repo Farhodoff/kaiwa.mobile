@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ProgressSync, type SyncState } from '../lib/progress-sync';
 import {
-  ensureUserProgress, fetchActivity, fetchLessonProgressMap, fetchReviewedCardIds,
+  ensureUserProgress, fetchActivity, fetchCardReviews, fetchLessonProgressMap,
   markCardReviewedDb, saveActivity, saveLessonProgress, saveUserProgress,
 } from './progress';
 
@@ -15,11 +15,11 @@ export function createProgressSync(
     storage: AsyncStorage,
     onChange,
     read: async () => {
-      const [progress, lessonProgress, reviewedCards, activity] = await Promise.all([
+      const [progress, lessonProgress, reviews, activity] = await Promise.all([
         ensureUserProgress(userId, name), fetchLessonProgressMap(userId),
-        fetchReviewedCardIds(userId), fetchActivity(userId),
+        fetchCardReviews(userId), fetchActivity(userId),
       ]);
-      return { progress, lessonProgress, reviewedCards, activity };
+      return { progress, lessonProgress, reviews, activity };
     },
     write: async (write) => {
       switch (write.kind) {
@@ -29,7 +29,7 @@ export function createProgressSync(
           isCompleted: write.row.is_completed,
           score: write.row.score,
         });
-        case 'review': return markCardReviewedDb(userId, write.cardId, 3, write.day);
+        case 'review': return markCardReviewedDb(userId, write.cardId, write.grade, write.day);
         case 'activity': return saveActivity(userId, write.row);
       }
     },
