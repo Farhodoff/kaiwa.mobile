@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { CompositeScreenProps } from '@react-navigation/native';
 import { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
@@ -11,25 +11,37 @@ import { PrimaryButton } from '../components/PrimaryButton';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { ErrorView, LoadingView } from '../components/StateView';
 import { useAsync } from '../hooks/useAsync';
-import { CardDeck, fetchDecks, fetchFlashcards } from '../services/content';
+import { CardDeck, Flashcard, fetchDecks, fetchFlashcards } from '../services/content';
 import { playTTS } from '../services/tts';
 import { useApp } from '../store/AppContext';
+import type { SM2Grade } from '../lib/spaced-repetition';
+import {
+  EMPTY_REPORT,
+  GRADE_XP,
+  addGrade,
+  completion,
+  percent,
+  recallRate,
+  type CardGrade,
+  type SessionReport,
+} from '../lib/cards-session';
 
 type Props = CompositeScreenProps<
   BottomTabScreenProps<MainTabParamList, 'Cards'>,
   NativeStackScreenProps<RootStackParamList>
 >;
 
-type Grade = 'yana' | 'qiyin' | 'yaxshi' | 'oson';
-
-const GRADE_XP: Record<Grade, number> = { yana: 1, qiyin: 3, yaxshi: 3, oson: 3 };
+/** Map the four UI buttons onto SM-2 grades. */
+const GRADE_SM2: Record<CardGrade, SM2Grade> = { yana: 1, qiyin: 2, yaxshi: 4, oson: 5 };
 
 export default function CardsScreen({ navigation }: Props) {
-  const { reviewedToday, markCardReviewed, addXp } = useApp();
+  const { reviewedToday, markCardReviewed, addXp, sm2Cards } = useApp();
   const [selectedDeckId, setSelectedDeckId] = useState<string>('');
   const [index, setIndex] = useState(0);
   const [flipped, setFlipped] = useState(false);
   const [sessionDone, setSessionDone] = useState(false);
+  const [queue, setQueue] = useState<Flashcard[]>([]);
+  const [report, setReport] = useState<SessionReport>(EMPTY_REPORT);
 
   const decksQuery = useAsync(() => fetchDecks(), []);
   const decks = useMemo(() => decksQuery.data ?? [], [decksQuery.data]);
@@ -39,7 +51,33 @@ export default function CardsScreen({ navigation }: Props) {
     () => (activeDeckId ? fetchFlashcards(activeDeckId) : Promise.resolve([])),
     [activeDeckId],
   );
-  const cards = cardsQuery.data ?? [];
+  const deckCards = cardsQuery.data;
+
+  // Keep the latest SM-2 state available to the session builder without
+  // reordering the deck while the user is reviewing it.
+  const sm2Ref = useRef(sm2Cards);
+  useEffect(() => {
+    sm2Ref.current = sm2Cards;
+  });
+
+  // Build the review queue once per deck load: due reviews first, then new cards.
+  useEffect(() => {
+    const ordered = [...(deckCards ?? [])].sort((a, b) => {
+      const aState = sm2Ref.current[a.id];
+      const bState = sm2Ref.current[b.id];
+      if (aState && bState) return aState.dueDate.localeCompare(bState.dueDate);
+      if (aState) return -1;
+      if (bState) return 1;
+      return 0;
+    });
+    setQueue(ordered);
+    setIndex(0);
+    setFlipped(false);
+    setSessionDone(false);
+    setReport(EMPTY_REPORT);
+  }, [deckCards]);
+
+  const cards = queue.length ? queue : (deckCards ?? []);
   const card = cards[index];
 
   const currentDeck: CardDeck | undefined = useMemo(
@@ -54,19 +92,22 @@ export default function CardsScreen({ navigation }: Props) {
 
   const selectDeck = (deckId: string) => {
     setSelectedDeckId(deckId);
+    setQueue([]);
     setIndex(0);
     setFlipped(false);
     setSessionDone(false);
+    setReport(EMPTY_REPORT);
   };
 
   const handleSpeak = (text: string) => {
     void playTTS(text, 'ja');
   };
 
-  const grade = (g: Grade) => {
+  const grade = (g: CardGrade) => {
     if (!card) return;
-    markCardReviewed(card.id);
-    addXp(GRADE_XP[g]);
+    const counted = markCardReviewed(card.id, GRADE_SM2[g]);
+    if (counted) addXp(GRADE_XP[g]);
+    setReport((previous) => addGrade(previous, g, counted ? GRADE_XP[g] : 0));
     setFlipped(false);
 
     if (index + 1 >= cards.length) {
@@ -80,6 +121,7 @@ export default function CardsScreen({ navigation }: Props) {
     setIndex(0);
     setFlipped(false);
     setSessionDone(false);
+    setReport(EMPTY_REPORT);
   };
 
   if (decksQuery.loading || cardsQuery.loading) {
@@ -132,13 +174,16 @@ export default function CardsScreen({ navigation }: Props) {
             Ajoyib! 🎉
           </Text>
           <Text style={styles.doneSub}>
-            "{currentDeck.title}" toʻplamidan {cards.length} ta kartani koʻrib chiqdingiz
+            "{currentDeck.title}" toʻplamidan {report.graded} ta kartani koʻrib chiqdingiz
           </Text>
           <View style={styles.doneStats}>
-            <DoneStat value={`${cards.length * 3}`} label="XP" />
-            <DoneStat value={`${reviewedToday}`} label="Kartalar" />
-            <DoneStat value="100%" label="Bajarildi" />
+            <DoneStat value={`${report.xp}`} label="XP" />
+            <DoneStat value={`${report.graded}`} label="Kartalar" />
+            <DoneStat value={`${percent(recallRate(report))}%`} label="Aniqlik" />
           </View>
+          <Text style={styles.doneToday}>
+            Bugun jami {reviewedToday} ta karta · {percent(completion(report, cards.length))}% bajarildi
+          </Text>
           <PrimaryButton title="Qaytadan" onPress={restart} style={{ marginTop: spacing.xl }} />
           <PrimaryButton
             title="Bosh sahifa"
@@ -465,6 +510,12 @@ const styles = StyleSheet.create({
     ...shadow.floating,
   },
   doneSub: { ...typography.bodySecondary, textAlign: 'center', marginTop: spacing.xs },
+  doneToday: {
+    ...typography.caption,
+    color: colors.textMuted,
+    textAlign: 'center',
+    marginTop: spacing.md,
+  },
   doneStats: {
     flexDirection: 'row',
     gap: spacing.md,
