@@ -33,13 +33,13 @@ export default function LessonDetailScreen({ route, navigation }: Props) {
   const total = vocab.length + grammar.length + phrases.length;
   const done = learned.length;
 
-  const toggleLearned = (key: string) => {
+  const toggleLearned = (key: string, word?: string) => {
     if (learned.includes(key)) return;
     const nextDone = done + 1;
     setLearned((prev) => [...prev, key]);
     addXp(2);
-    // Only vocabulary items count toward "words learned".
-    if (key.startsWith('v')) learnWord();
+    // Only new vocabulary counts toward "words learned".
+    if (word) learnWord(word);
     // Persist lesson progress so Home/Learn reflect the real percentage.
     saveLessonScore(lessonId, {
       progress: total ? Math.min(1, nextDone / total) : 0,
@@ -115,7 +115,7 @@ export default function LessonDetailScreen({ route, navigation }: Props) {
               const key = `v${i}`;
               const isLearned = learned.includes(key);
               return (
-                <Pressable key={key} onPress={() => toggleLearned(key)}>
+                <Pressable key={key} onPress={() => toggleLearned(key, v.ja)}>
                   <Card style={[styles.row, isLearned && styles.rowLearned]}>
                     <Pressable
                       hitSlop={8}
