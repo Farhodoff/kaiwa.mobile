@@ -8,6 +8,7 @@ import { Card } from '../components/Card';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { ErrorView, LoadingView } from '../components/StateView';
 import { useAsync } from '../hooks/useAsync';
+import { supabase } from '../lib/supabase';
 import {
   NotificationRow,
   fetchNotifications,
@@ -43,6 +44,8 @@ export default function NotificationsScreen({ navigation }: Props) {
   const { user } = useAuth();
   const userId = user?.id ?? '';
   const [filter, setFilter] = useState<(typeof FILTERS)[number]['id']>('all');
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const query = useAsync(async () => {
     await seedWelcomeNotification(userId);
@@ -54,15 +57,17 @@ export default function NotificationsScreen({ navigation }: Props) {
   const unreadCount = items.filter((i) => !i.isRead).length;
 
   const markAllRead = () => {
-    items.forEach((i) => {
-      if (!i.isRead) markNotificationRead(userId, i.id).catch(() => undefined);
-    });
-    query.reload();
+    void runAction(() =>
+      Promise.all(
+        items
+          .filter((item) => !item.isRead)
+          .map((item) => markNotificationRead(userId, item.id)),
+      ),
+    );
   };
 
   const toggleRead = (id: string) => {
-    markNotificationRead(userId, id).catch(() => undefined);
-    query.reload();
+    void runAction(() => markNotificationRead(userId, id));
   };
 
   const clearAll = () => {
@@ -70,10 +75,33 @@ export default function NotificationsScreen({ navigation }: Props) {
       query.reload();
       return;
     }
-    import('../lib/supabase').then(({ supabase }) =>
-      supabase.from('user_notifications').delete().eq('user_id', userId),
-    );
-    setTimeout(() => query.reload(), 400);
+    void runAction(async () => {
+      const { error } = await supabase
+        .from('user_notifications')
+        .delete()
+        .eq('user_id', userId);
+      if (error) throw new Error(error.message);
+    });
+  };
+
+  /**
+   * Wait for the write to finish before reloading, otherwise the list renders
+   * the old rows and the unread badge looks broken on slow networks.
+   */
+  const runAction = async (action: () => Promise<unknown>) => {
+    if (busy) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      await action();
+      query.reload();
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : 'Amalni bajarib bo‘lmadi. Qayta urinib ko‘ring.',
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
   if (query.loading) {
@@ -106,6 +134,18 @@ export default function NotificationsScreen({ navigation }: Props) {
           ) : null
         }
       />
+
+      {actionError ? (
+        <Pressable
+          onPress={() => setActionError(null)}
+          accessibilityRole="button"
+          accessibilityLabel={`${actionError} Yopish`}
+          style={styles.actionError}
+        >
+          <Ionicons name="alert-circle-outline" size={16} color={colors.accent} />
+          <Text style={styles.actionErrorText}>{actionError}</Text>
+        </Pressable>
+      ) : null}
 
       {/* Filters */}
       <ScrollView
@@ -197,6 +237,18 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
   },
   markAllText: { fontSize: 11, fontWeight: '700', color: colors.primary },
+  actionError: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginHorizontal: spacing.xl,
+    marginBottom: spacing.sm,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.accentSoft,
+  },
+  actionErrorText: { flex: 1, fontSize: 12, fontWeight: '600', color: colors.accent },
   filtersScroll: {
     // Keep the horizontal scroller at content height — without this web (RNW)
     // stretches it with flex:1 and blows the chips up to full screen height.
