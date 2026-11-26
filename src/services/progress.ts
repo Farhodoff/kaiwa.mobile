@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabase';
 import type { LessonProgressRow } from './content';
+import { localDay, type ReviewEntry } from '../lib/daily';
 
 /**
  * User progress service — all gamification state lives in PostgreSQL
@@ -189,21 +190,25 @@ export async function saveLessonProgress(
 /* Flashcard reviews                                                          */
 /* -------------------------------------------------------------------------- */
 
-/** All card ids the user has ever reviewed (for "words learned" + session guard). */
-export async function fetchReviewedCardIds(userId: string): Promise<string[]> {
+/** Every card review with the day it happened (unique per user/card/day). */
+export async function fetchCardReviews(userId: string): Promise<ReviewEntry[]> {
   const { data, error } = await supabase
     .from('mobile_card_reviews')
-    .select('card_id')
-    .eq('user_id', userId);
+    .select('card_id, reviewed_date')
+    .eq('user_id', userId)
+    .order('reviewed_date', { ascending: false });
   if (error) throw new Error(error.message);
-  return Array.from(new Set((data ?? []).map((r) => r.card_id as string)));
+  return (data ?? []).map((row) => ({
+    cardId: row.card_id as string,
+    day: row.reviewed_date as string,
+  }));
 }
 
 export async function markCardReviewedDb(
   userId: string,
   cardId: string,
   grade = 3,
-  day = new Date().toISOString().slice(0, 10),
+  day = localDay(),
 ): Promise<void> {
   const { error } = await supabase.from('mobile_card_reviews').upsert(
     { user_id: userId, card_id: cardId, reviewed_date: day, grade },
@@ -217,7 +222,7 @@ export async function markCardReviewedDb(
 /* -------------------------------------------------------------------------- */
 
 export async function fetchActivity(userId: string, days = 30): Promise<ActivityRow[]> {
-  const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  const since = localDay(new Date(Date.now() - days * 86400000));
   const { data, error } = await supabase
     .from('mobile_daily_activity')
     .select('day, xp, minutes')
