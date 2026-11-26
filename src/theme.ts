@@ -13,6 +13,7 @@ export const colors = {
 
   // Accents
   accent: '#FF6B6B',
+  accentSoft: '#FFEDED',
   success: '#22C55E',
   successLight: '#E9FBEF',
   warning: '#F59E0B',
