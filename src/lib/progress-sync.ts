@@ -1,10 +1,13 @@
 import type { LessonProgressRow } from '../services/content';
 import type { ActivityRow, UserProgress } from '../services/progress';
+import type { SM2Grade } from './spaced-repetition';
+import type { ReviewEntry } from './daily';
 
 export type ProgressSnapshot = {
   progress: UserProgress;
   lessonProgress: Record<string, LessonProgressRow>;
-  reviewedCards: string[];
+  /** Card reviews with their day, so "today" can be derived at any time. */
+  reviews: ReviewEntry[];
   activity: ActivityRow[];
 };
 
@@ -13,7 +16,7 @@ export type ProgressSnapshot = {
 export type ProgressWrite =
   | { kind: 'progress'; patch: Partial<UserProgress> }
   | { kind: 'lesson'; row: LessonProgressRow }
-  | { kind: 'review'; cardId: string; day: string }
+  | { kind: 'review'; cardId: string; day: string; grade: SM2Grade }
   | { kind: 'activity'; row: ActivityRow };
 
 type Document = {
@@ -21,6 +24,31 @@ type Document = {
   snapshot: ProgressSnapshot;
   pending: Record<string, ProgressWrite>;
 };
+
+/**
+ * Snapshots cached before reviews carried a day kept a plain `reviewedCards`
+ * list. Keep those caches usable instead of forcing an error screen.
+ */
+function normalizeSnapshot(
+  snapshot: Partial<ProgressSnapshot> & { reviewedCards?: string[] },
+): ProgressSnapshot {
+  const explicitReviews = Array.isArray(snapshot.reviews)
+    ? snapshot.reviews.filter(
+        (review): review is ReviewEntry =>
+          !!review && typeof review.cardId === 'string' && typeof review.day === 'string',
+      )
+    : [];
+  const reviews: ReviewEntry[] =
+    explicitReviews.length > 0
+      ? explicitReviews
+      : (snapshot.reviewedCards ?? []).map((cardId) => ({ cardId, day: '' }));
+  return {
+    progress: snapshot.progress as UserProgress,
+    lessonProgress: snapshot.lessonProgress ?? {},
+    reviews,
+    activity: snapshot.activity ?? [],
+  };
+}
 
 type Storage = {
   getItem: (key: string) => Promise<string | null>;
@@ -93,11 +121,14 @@ export class ProgressSync {
       const raw = await this.options.storage.getItem(this.key);
       if (this.stopped) return;
       if (raw) {
-        const parsed = JSON.parse(raw) as Document;
+        const parsed = JSON.parse(raw) as Document & {
+          snapshot?: Partial<ProgressSnapshot> & { reviewedCards?: string[] };
+        };
         if (parsed.version !== 1 || !parsed.snapshot?.progress || !parsed.pending) {
           throw new Error('Invalid progress cache');
         }
-        this.document = parsed;
+        parsed.snapshot = normalizeSnapshot(parsed.snapshot);
+        this.document = parsed as Document;
         this.emit(true);
       }
     } catch {

@@ -10,7 +10,7 @@ const initial = () => ({
     lessonsDone: 0, lastActivityDate: '2026-11-19',
     notificationsEnabled: true, soundEnabled: true, jlptDone: {},
   },
-  reviewedCards: [], lessonProgress: {}, activity: [],
+  reviews: [], lessonProgress: {}, activity: [],
 });
 
 function deferred() {
@@ -47,8 +47,11 @@ function fixture() {
     writes.push(structuredClone(op));
     if (op.kind === 'progress') Object.assign(state.remote.progress, op.patch);
     if (op.kind === 'lesson') state.remote.lessonProgress[op.row.lesson_id] = op.row;
-    if (op.kind === 'review' && !state.remote.reviewedCards.includes(op.cardId)) {
-      state.remote.reviewedCards.push(op.cardId);
+    if (op.kind === 'review') {
+      const exists = state.remote.reviews.some(
+        (review) => review.cardId === op.cardId && review.day === op.day,
+      );
+      if (!exists) state.remote.reviews.push({ cardId: op.cardId, day: op.day });
     }
     if (op.kind === 'activity') {
       state.remote.activity = [op.row, ...state.remote.activity.filter((item) => item.day !== op.row.day)];
@@ -233,9 +236,9 @@ test('a partially sent batch resumes after restart with the original review date
   } });
   await first.start();
   const result = recordLessonProgress(first.snapshot, 'lesson-2', { progress: 1, isCompleted: true });
-  first.update({ ...result.snapshot, reviewedCards: ['card-1'] }, {
+  first.update({ ...result.snapshot, reviews: [{ cardId: 'card-1', day: '2026-11-18' }] }, {
     ...result.writes,
-    'review:card-1:2026-11-18': { kind: 'review', cardId: 'card-1', day: '2026-11-18' },
+    'review:card-1:2026-11-18': { kind: 'review', cardId: 'card-1', day: '2026-11-18', grade: 3 },
   });
   await first.sync();
   first.stop();
@@ -244,6 +247,25 @@ test('a partially sent batch resumes after restart with the original review date
   const sent = f.writes.length;
   const second = f.create();
   await second.start();
-  assert.deepEqual(f.writes.slice(sent), [{ kind: 'review', cardId: 'card-1', day: '2026-11-18' }]);
-  assert.deepEqual(second.snapshot.reviewedCards, ['card-1']);
+  assert.deepEqual(f.writes.slice(sent), [
+    { kind: 'review', cardId: 'card-1', day: '2026-11-18', grade: 3 },
+  ]);
+  assert.deepEqual(second.snapshot.reviews, [{ cardId: 'card-1', day: '2026-11-18' }]);
+});
+
+test('a cache written before reviews carried a day still loads', async () => {
+  const f = fixture();
+  f.state.offline = true;
+  const legacySnapshot = initial();
+  delete legacySnapshot.reviews;
+  legacySnapshot.reviewedCards = ['old-card'];
+  f.disk.set('kaiwa-progress:v1:alice', JSON.stringify({
+    version: 1,
+    snapshot: legacySnapshot,
+    pending: {},
+  }));
+  const client = f.create();
+  await client.start();
+  assert.deepEqual(client.snapshot.reviews, [{ cardId: 'old-card', day: '' }]);
+  assert.equal(client.snapshot.reviewedCards, undefined);
 });
