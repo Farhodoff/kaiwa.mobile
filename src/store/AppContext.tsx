@@ -17,6 +17,27 @@ import { ProgressSync, type ProgressSnapshot, type SyncState } from '../lib/prog
 import { recordLessonProgress } from '../lib/lesson-progress';
 import { ErrorView, LoadingView } from '../components/StateView';
 import { colors, spacing } from '../theme';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  type SM2CardState,
+  type SM2Grade,
+  gradeCard,
+  isCardDue,
+} from '../lib/spaced-repetition';
+import {
+  addActivity,
+  elapsedMinutes,
+  isFirstReviewEver,
+  localDay,
+  minutesOn,
+  reviewsOn,
+  streakOn,
+} from '../lib/daily';
+import {
+  addLearnedWord,
+  parseLearnedWords,
+  serializeLearnedWords,
+} from '../lib/learned-words';
 
 type AppState = {
   /** true while progress is being loaded from PostgreSQL */
@@ -29,6 +50,7 @@ type AppState = {
   wordsLearned: number;
   dailyGoalDone: number; // minutes studied today
   dailyGoal: number;
+  /** Unique cards reviewed today (local day, resets at midnight). */
   reviewedToday: number;
   notifications: boolean;
   sound: boolean;
@@ -36,17 +58,19 @@ type AppState = {
   lessonsDone: number;
   /** JLPT answered-correct counts per section id. */
   jlptDone: Record<string, number>;
-  /** IDs of flashcards the user has reviewed. */
-  reviewedCards: string[];
   /** User's lesson progress rows keyed by lesson id. */
   lessonProgress: Record<string, LessonProgressRow>;
   /** Last 30 days of XP/minutes activity. */
   activity: ProgressSnapshot['activity'];
+  /** SM-2 spaced-repetition state per card, cached on this device. */
+  sm2Cards: Record<string, SM2CardState>;
 
-  addXp: (amount: number) => void;
-  markCardReviewed: (id: string) => void;
-  /** Count a vocabulary item learned inside a lesson. */
-  learnWord: () => void;
+  /** Award XP; `minutes` defaults to the time actually spent since the last award. */
+  addXp: (amount: number, minutes?: number) => void;
+  /** Grade a due card. Returns false when the card was not due (nothing counted). */
+  markCardReviewed: (id: string, grade?: SM2Grade) => boolean;
+  /** Count a vocabulary item once. Returns false when it was already learned. */
+  learnWord: (word: string) => boolean;
   setNotifications: (v: boolean) => void;
   setSound: (v: boolean) => void;
   setDailyGoal: (minutes: number) => void;
@@ -62,18 +86,14 @@ type AppState = {
 
 const AppContext = createContext<AppState | null>(null);
 
-const today = () => new Date().toISOString().slice(0, 10);
+const sm2Key = (userId: string) => `kaiwa-sm2:${userId}`;
+const EMPTY_SM2: Record<string, SM2CardState> = {};
+const EMPTY_ACTIVITY: ProgressSnapshot['activity'] = [];
+const wordsKey = (userId: string) => `kaiwa-words:${userId}`;
 
 function xpGoalProgress(xp: number, goal: number): number {
   if (goal <= 0) return 0;
   return Math.min(1, Math.round(((xp % goal) / goal) * 100) / 100);
-}
-
-/** true when `date` was yesterday */
-function consecutive(date: string): boolean {
-  const last = new Date(`${date}T00:00:00`).getTime();
-  const now = new Date(`${today()}T00:00:00`).getTime();
-  return Math.round((now - last) / 86400000) === 1;
 }
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
@@ -82,6 +102,105 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const name = user?.name;
   const session = useRef<{ userId: string; client: ProgressSync } | null>(null);
   const [state, setState] = useState<{ userId: string; sync: SyncState } | null>(null);
+  // Cards are tied to the owner id so a different account never sees the
+  // previous user's SM-2 state, without resetting state inside an effect.
+  const [sm2Store, setSm2Store] = useState<{
+    owner: string | null;
+    cards: Record<string, SM2CardState>;
+  }>({ owner: null, cards: {} });
+  const sm2Cards = sm2Store.owner === userId ? sm2Store.cards : EMPTY_SM2;
+  const sm2CardsRef = useRef<Record<string, SM2CardState>>({});
+  const sm2Loaded = useRef<Promise<void>>(Promise.resolve());
+
+  // Local day: recomputed while the app is open so goals and streaks reset at
+  // midnight without needing a restart.
+  const [todayKey, setTodayKey] = useState(() => localDay());
+  const lastActivityAt = useRef<number | null>(null);
+
+  // Learned vocabulary ledger (idempotent word counting on this device).
+  const learnedWordsRef = useRef<string[]>([]);
+  const learnedLoaded = useRef<Promise<void>>(Promise.resolve());
+
+  useEffect(() => {
+    const tick = () => {
+      const now = localDay();
+      setTodayKey((previous) => (previous === now ? previous : now));
+    };
+    const timer = setInterval(tick, 30_000);
+    const subscription = NativeAppState.addEventListener('change', (status) => {
+      if (status === 'active') tick();
+    });
+    return () => {
+      clearInterval(timer);
+      subscription.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    learnedWordsRef.current = [];
+    if (!userId) return;
+
+    let alive = true;
+    learnedLoaded.current = AsyncStorage.getItem(wordsKey(userId))
+      .then((raw) => {
+        if (!alive) return;
+        const stored = parseLearnedWords(raw);
+        // Keep words learned while the ledger was still loading.
+        const merged = Array.from(new Set([...stored, ...learnedWordsRef.current]));
+        learnedWordsRef.current = merged;
+      })
+      .catch((error: unknown) => {
+        console.warn('O‘rganilgan so‘zlar ro‘yxatini o‘qish muvaffaqiyatsiz:', error);
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, [userId]);
+
+  const persistLearnedWords = useCallback(() => {
+    if (!userId) return;
+    void learnedLoaded.current
+      .then(() =>
+        AsyncStorage.setItem(wordsKey(userId), serializeLearnedWords(learnedWordsRef.current)),
+      )
+      .catch((error: unknown) => {
+        console.warn('O‘rganilgan so‘zlar ro‘yxatini saqlash muvaffaqiyatsiz:', error);
+      });
+  }, [userId]);
+
+  useEffect(() => {
+    sm2CardsRef.current = {};
+    if (!userId) return;
+
+    let alive = true;
+    sm2Loaded.current = AsyncStorage.getItem(sm2Key(userId))
+      .then((raw) => {
+        if (!alive || !raw) return;
+        const parsed = JSON.parse(raw) as Record<string, SM2CardState>;
+        if (!parsed || typeof parsed !== 'object') return;
+        // Keep cards graded while the local cache was still loading.
+        const merged = { ...parsed, ...sm2CardsRef.current };
+        sm2CardsRef.current = merged;
+        setSm2Store({ owner: userId, cards: merged });
+      })
+      .catch((error: unknown) => {
+        console.warn('SM-2 holatini o‘qish muvaffaqiyatsiz:', error);
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, [userId]);
+
+  const persistSm2 = useCallback(() => {
+    if (!userId) return;
+    void sm2Loaded.current
+      .then(() => AsyncStorage.setItem(sm2Key(userId), JSON.stringify(sm2CardsRef.current)))
+      .catch((error: unknown) => {
+        console.warn('SM-2 holatini saqlash muvaffaqiyatsiz:', error);
+      });
+  }, [userId]);
 
   useEffect(() => {
     if (!userId) return;
@@ -120,52 +239,81 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
   }, [getClient]);
 
-  const addXp = useCallback((amount: number) => {
+  const addXp = useCallback((amount: number, minutes?: number) => {
     const client = getClient();
     const snapshot = client?.snapshot;
     if (!snapshot || amount <= 0 || !Number.isFinite(amount)) return;
+
     const prev = snapshot.progress;
-    const day = today();
-    const isToday = prev.lastActivityDate === day;
+    const day = localDay();
+    const now = Date.now();
+    const gainedMinutes = minutes ?? elapsedMinutes(lastActivityAt.current, now);
+    lastActivityAt.current = now;
+
     const xp = prev.xp + amount;
+    const activity = addActivity(snapshot.activity, day, amount, gainedMinutes);
     const patch: Partial<UserProgress> = {
       xp,
-      streak: isToday ? prev.streak
-        : prev.lastActivityDate && consecutive(prev.lastActivityDate) ? prev.streak + 1 : 1,
+      streak: streakOn(day, prev.lastActivityDate, prev.streak),
       lastActivityDate: day,
-      dailyGoalDone: Math.min(prev.dailyGoal, (isToday ? prev.dailyGoalDone : 0) + 1),
+      dailyGoalDone: Math.min(prev.dailyGoal, minutesOn(activity, day)),
       levelProgress: xpGoalProgress(xp, prev.xpGoal),
     };
-    const previous = snapshot.activity.find((row) => row.day === day);
-    const row = { day, xp: (previous?.xp ?? 0) + amount, minutes: (previous?.minutes ?? 0) + 1 };
-    client!.update({
-      ...snapshot, progress: { ...prev, ...patch },
-      activity: [row, ...snapshot.activity.filter((item) => item.day !== day)],
-    }, {
+    const row = activity.find((item) => item.day === day)!;
+    client!.update({ ...snapshot, progress: { ...prev, ...patch }, activity }, {
       progress: { kind: 'progress', patch },
       [`activity:${day}`]: { kind: 'activity', row },
     });
   }, [getClient]);
 
-  const markCardReviewed = useCallback((id: string) => {
+  const markCardReviewed = useCallback((id: string, grade: SM2Grade = 3): boolean => {
     const client = getClient();
     const snapshot = client?.snapshot;
-    if (!snapshot || snapshot.reviewedCards.includes(id)) return;
-    const patch = { wordsLearned: snapshot.progress.wordsLearned + 1 };
-    const day = today();
-    client!.update({
-      ...snapshot, reviewedCards: [...snapshot.reviewedCards, id],
-      progress: { ...snapshot.progress, ...patch },
-    }, {
-      progress: { kind: 'progress', patch },
-      [`review:${id}:${day}`]: { kind: 'review', cardId: id, day },
-    });
-  }, [getClient]);
+    if (!snapshot) return false;
 
-  const learnWord = useCallback(() => {
-    const snapshot = getClient()?.snapshot;
-    if (snapshot) apply({ wordsLearned: snapshot.progress.wordsLearned + 1 });
-  }, [apply, getClient]);
+    const day = localDay();
+    const previous = sm2CardsRef.current[id];
+    // A card that is scheduled for a future day is not due yet.
+    if (previous && !isCardDue(previous.dueDate, day)) return false;
+
+    const next = gradeCard(previous, id, grade, day);
+    sm2CardsRef.current = { ...sm2CardsRef.current, [id]: next };
+    setSm2Store({ owner: userId, cards: sm2CardsRef.current });
+    persistSm2();
+
+    // Only the first review of a card counts toward `wordsLearned`; later
+    // reviews are scheduled by SM-2 and recorded with their own grade.
+    const firstEver = isFirstReviewEver(snapshot.reviews, id);
+    const reviews = [
+      { cardId: id, day },
+      ...snapshot.reviews.filter((review) => !(review.cardId === id && review.day === day)),
+    ];
+    const patch = firstEver
+      ? { wordsLearned: snapshot.progress.wordsLearned + 1 }
+      : {};
+    client!.update({ ...snapshot, reviews, progress: { ...snapshot.progress, ...patch } }, {
+      progress: { kind: 'progress', patch },
+      [`review:${id}:${day}`]: { kind: 'review', cardId: id, day, grade },
+    });
+    return true;
+  }, [getClient, persistSm2, userId]);
+
+  const learnWord = useCallback((word: string): boolean => {
+    const client = getClient();
+    const snapshot = client?.snapshot;
+    if (!snapshot) return false;
+
+    const result = addLearnedWord(learnedWordsRef.current, word);
+    if (!result.added) return false;
+    learnedWordsRef.current = result.keys;
+    persistLearnedWords();
+
+    const patch = { wordsLearned: snapshot.progress.wordsLearned + 1 };
+    client!.update({ ...snapshot, progress: { ...snapshot.progress, ...patch } }, {
+      progress: { kind: 'progress', patch },
+    });
+    return true;
+  }, [getClient, persistLearnedWords]);
   const setNotifications = useCallback((v: boolean) => apply({ notificationsEnabled: v }), [apply]);
   const setSound = useCallback((v: boolean) => apply({ soundEnabled: v }), [apply]);
   const setDailyGoal = useCallback((minutes: number) => apply({ dailyGoal: minutes }), [apply]);
@@ -185,20 +333,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const client = getClient();
     const snapshot = client?.snapshot;
     if (!snapshot) return;
-    const patch = { conversationsDone: snapshot.progress.conversationsDone + 1 };
-    const day = today();
-    const previous = snapshot.activity.find((row) => row.day === day);
-    const row = { day, xp: (previous?.xp ?? 0) + 10, minutes: (previous?.minutes ?? 0) + minutes };
-    client!.update({
-      ...snapshot, progress: { ...snapshot.progress, ...patch },
-      activity: [row, ...snapshot.activity.filter((item) => item.day !== day)],
-    }, {
+    const prev = snapshot.progress;
+    const day = localDay();
+    const activity = addActivity(snapshot.activity, day, 10, Math.max(1, minutes));
+    const patch = {
+      conversationsDone: prev.conversationsDone + 1,
+      dailyGoalDone: Math.min(prev.dailyGoal, minutesOn(activity, day)),
+    };
+    const row = activity.find((item) => item.day === day)!;
+    client!.update({ ...snapshot, progress: { ...prev, ...patch }, activity }, {
       progress: { kind: 'progress', patch },
       [`activity:${day}`]: { kind: 'activity', row },
     });
   }, [getClient]);
 
   const resetSession = useCallback(() => {
+    lastActivityAt.current = null;
     apply({ xp: 0, dailyGoalDone: 0, streak: 0, lastActivityDate: null });
   }, [apply]);
   const refresh = useCallback(() => {
@@ -210,21 +360,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const sync = state?.userId === userId ? state.sync : null;
   const snapshot = sync?.snapshot;
   const progress = snapshot?.progress ?? DEFAULT_PROGRESS;
+  const activity = snapshot?.activity ?? EMPTY_ACTIVITY;
+  // Both values are derived for the *current local day*, so they reset at
+  // midnight and can never drift from the activity/review records.
+  const dailyGoalDone = Math.min(progress.dailyGoal, minutesOn(activity, todayKey));
+  const reviewedToday = snapshot ? reviewsOn(snapshot.reviews, todayKey) : 0;
   const value = useMemo<AppState>(() => ({
     loading: !!userId && !snapshot,
     xp: progress.xp, xpGoal: progress.xpGoal, streak: progress.streak,
     level: progress.level, levelProgress: progress.levelProgress, wordsLearned: progress.wordsLearned,
-    dailyGoalDone: progress.dailyGoalDone, dailyGoal: progress.dailyGoal,
-    reviewedToday: snapshot?.reviewedCards.length ?? 0,
+    dailyGoalDone, dailyGoal: progress.dailyGoal,
+    reviewedToday,
     notifications: progress.notificationsEnabled, sound: progress.soundEnabled,
     conversationsDone: progress.conversationsDone, lessonsDone: progress.lessonsDone,
-    jlptDone: progress.jlptDone, reviewedCards: snapshot?.reviewedCards ?? [],
-    lessonProgress: snapshot?.lessonProgress ?? {}, activity: snapshot?.activity ?? [],
+    jlptDone: progress.jlptDone,
+    lessonProgress: snapshot?.lessonProgress ?? {}, activity,
+    sm2Cards,
     addXp, markCardReviewed, learnWord, setNotifications, setSound, setDailyGoal,
     saveLessonScore, registerConversation, resetSession, refresh,
   }), [
-    userId, snapshot, progress, addXp, markCardReviewed, learnWord, setNotifications,
+    userId, snapshot, progress, activity, dailyGoalDone, reviewedToday,
+    addXp, markCardReviewed, learnWord, setNotifications,
     setSound, setDailyGoal, saveLessonScore, registerConversation, resetSession, refresh,
+    sm2Cards,
   ]);
 
   return (
